@@ -371,9 +371,48 @@
   request)
 
 
-;; fcgi records
-(struct fcgi-get-values-result management-record (table) #:mutable)
+;; NOTE parse and pack for fcgi-get-values, fcgi-get-values-result and fcgi-params
+;; are almost exactly the same, so we pull impl out and reuse
+(define (parse-fcgi/name-values record in)
+  (let ((clen (get: record 'clen))
+        (plen (get: record 'plen)))
+    (bit-string-case (read-bytes (+ clen plen) in)
+      ([(params :: binary bytes clen) (_ :: bytes plen)]
+       (set! params (bit-string->bytes params))
+       (set: record 'body params)
+       (cond
+         ((fcgi-get-values? record)
+          (set-fcgi-get-values-table! record (parse-name-values params)))
 
+         ((stream-record? record)
+          (when (zero? clen)
+            (set-stream-record-complete? true)))))
+      (else
+       (error "Failed to parse" (object-name record))))
+    record))
+
+
+(define (pack-fcgi/name-values record content)
+  (set! content
+        (pack-name-values
+         (cond
+           ((hash? content) content)
+           ((fcgi-params? record) (fcgi-params-table record))
+           ((fcgi-get-values? record) (fcgi-get-values-table record)))))
+  (define clen (bytes-length content))
+  (define-values (plen padding content) (pad content))
+  (define header (ht ('version 1)
+                     ('type (record-type record))
+                     ('id (or (record-id record) FCGI_NULL_REQUEST_ID))
+                     ('clen clen)
+                     ('plen plen)))
+  (bit-string->bytes
+   (bit-string
+    (header :: (fcgi-header))
+    (content :: binary))))
+
+
+;; fcgi records
 (struct fcgi-stdout stream-record ()      #:mutable)
 (struct fcgi-stderr stream-record ()      #:mutable)
 (struct fcgi-data   stream-record ()      #:mutable)
@@ -382,44 +421,31 @@
 (struct fcgi-unknown           management-record (type)  #:mutable)
 
 
-;;** - fcgi-get-values ----------------------------------------------- *;;
+;;** - fcgi-get-values[-result] ------------------------------------- *;;
 
 
 (struct fcgi-get-values management-record (table) #:mutable
 
   #:methods gen:fcgi
 
-  ((define (parse record in)
-     (let ((clen (get: record 'clen))
-           (plen (get: record 'plen)))
-       (bit-string-case (read-bytes (+ clen plen) in)
-         ([(params :: binary bytes clen) (_ :: bytes plen)]
-          (set! params (bit-string->bytes params))
-          (set: record 'body params)
-          (set-fcgi-get-values-table! record (parse-name-values params)))
-         (else
-          (error "Failed to parse" 'fcgi-get-values)))
-       record))
-
-   (define (pack record content)
-     (if (hash? content)
-         (set! content (pack-name-values content))
-         (set! content (pack-name-values (fcgi-get-values-table record))))
-     (define clen (bytes-length content))
-     (define-values (plen padding content) (pad content))
-     (define header (ht ('version 1)
-                        ('type FCGI_GET_VALUES)
-                        ('id FCGI_NULL_REQUEST_ID)
-                        ('clen clen)
-                        ('plen plen)))
-     (bit-string->bytes
-      (bit-string
-       (header :: (fcgi-header))
-       (content :: binary))))
-
-   ;; We let connection-writer respond with appropriate FCGI_GET_VALUES_RESULT
+  ((define parse parse-fcgi/name-values)
+   (define pack pack-fcgi/name-values)
+   ;; NOTE connection-writer will respond with appropriate FCGI_GET_VALUES_RESULT
    (define (deliver record connection)
      (thread-send (connection-writer connection) record)
+     record)))
+
+
+(struct fcgi-get-values-result fcgi-get-values () #:mutable
+
+  #:methods gen:fcgi
+
+  ((define parse parse-fcgi/name-values)
+   (define pack pack-fcgi/name-values)
+   ;; NOTE this is to be called by connection-writer. Just being consistent.
+   (define (deliver record connection)
+     ;; TODO probably want it best effort without blocking
+     (write-bytes (pack record) (connection-out connection))
      record)))
 
 
@@ -436,7 +462,7 @@
                                    (parse (make-record) (current-input-port)))))
 
 
-;;** - fcgi-begin-request -------------------------------------------- *;;
+;;** - fcgi-begin-request ------------------------------------------- *;;
 
 
 (struct fcgi-begin-request record (role flags) #:mutable
@@ -491,7 +517,7 @@
   (check-pred hash? (parse-begin-request begin-request-message)))
 
 
-;;** - fcgi-params --------------------------------------------------- *;;
+;;** - fcgi-params -------------------------------------------------- *;;
 
 
 ;; TODO With current implementation we have to receive all fcgi-params packets to
@@ -504,37 +530,12 @@
 
   #:methods gen:fcgi
 
-  ((define (parse record in)
-     (let ((clen (get: record 'clen))
-           (plen (get: record 'plen)))
-       (bit-string-case (read-bytes (+ clen plen) in)
-         ([(params :: binary bytes clen) (_ :: bytes plen)]
-          (set! params (bit-string->bytes params))
-          (set: record 'body params)
-          (when (zero? clen)
-            (set-stream-record-complete? true)))
-         (else
-          (error "Failed to parse" 'fcgi-params)))
-       record))
-
-
-   (define (pack record content)
-     (if (hash? content)
-         (set! content (pack-name-values content))
-         (set! content (pack-name-values (fcgi-params-table record))))
-     (define clen (bytes-length content))
-     (define-values (plen padding content) (pad content))
-     (define header (ht ('version 1)
-                        ('type FCGI_PARAMS)
-                        ('id (record-id record))
-                        ('clen clen)
-                        ('plen plen)))
-     (bit-string->bytes
-      (bit-string
-       (header :: (fcgi-header))
-       (content :: binary))))
-
-
+  ((define parse parse-fcgi/name-values)
+   ;; NOTE technically the the content table to be packed as name-values maybe too
+   ;; large for a single packet and would have to be split, but we'll only ever
+   ;; use pack here for testing and implement it to offer consistent interface. If
+   ;; this ever changes would need to consider packing into multiple packets.
+   (define pack pack-fcgi/name-values)
    (define (deliver record connection)
      (define request (request-of #:record record connection))
      (push! record #;onto request)
