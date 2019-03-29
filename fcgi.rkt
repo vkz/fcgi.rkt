@@ -16,7 +16,7 @@
 (struct connection (in out reader writer requests) #:mutable)
 
 
-(struct request (id records params in out err thread) #:mutable
+(struct request (id records params in out err data thread) #:mutable
   #:methods gen:custom-write
   ((define write-proc
      (make-constructor-style-printer
@@ -24,63 +24,11 @@
       (λ (self) (list (record-id self)))))))
 
 
-(struct record (id type content) #:mutable
-
-  #:methods gen:fcgi
-
-  ((define/generic delegate-parse parse)
-   (define (parse self in)
-     (bit-string-case (read-bytes 8 in)
-       ([(record :: (fcgi-header))] (delegate-parse record in))
-       (else (error "Failed to parse fcgi-header")))))
-
-  #:methods gen:dict
-
-  ((define/generic super-dict-ref dict-ref)
-   (define (dict-ref dict key [default (λ () undefined)])
-     (super-dict-ref (record-content dict) key default))
-
-   (define/generic super-dict-set! dict-set!)
-   (define (dict-set! dict key v)
-     (super-dict-set! (record-content dict) key v))
-
-   (define/generic super-dict-remove! dict-remove!)
-   (define (dict-remove! dict key)
-     (super-dict-remove! (record-content dict) key))
-
-   (define/generic super-dict-iterate-first dict-iterate-first)
-   (define (dict-iterate-first dict)
-     (super-dict-iterate-first (record-content dict)))
-
-   (define/generic super-dict-iterate-next dict-iterate-next)
-   (define (dict-iterate-next dict pos)
-     (super-dict-iterate-next (record-content dict) pos))
-
-   (define/generic super-dict-iterate-key dict-iterate-key)
-   (define (dict-iterate-key dict pos)
-     (super-dict-iterate-key (record-content dict) pos))
-
-   (define/generic super-dict-iterate-value dict-iterate-value)
-   (define (dict-iterate-value dict pos)
-     (super-dict-iterate-value (record-content dict) pos)))
-
-  #:methods gen:custom-write
-
-  ((define write-proc
-     (make-constructor-style-printer
-      (λ (self) 'record)
-      (λ (self) (list (record-id self) (record-content self)))))))
-
-
-;; base records
-(struct stream-record     record (complete?) #:mutable)
-(struct management-record record ()          #:mutable)
-
-
 ;; Standard ports for request struct
 (struct stdin  (source sink) prop:input-port 0 prop:output-port 1)
 (struct stdout (source sink) prop:input-port 0 prop:output-port 1)
 (struct stderr (source sink) prop:input-port 0 prop:output-port 1)
+(struct data   (source sink) prop:input-port 0 prop:output-port 1)
 
 
 ;;* Constants ------------------------------------------------------- *;;
@@ -146,9 +94,10 @@
 
 (define (bytes-of thing)
   (cond
-    ((bytes?  thing) thing)
-    ((string? thing) (string->bytes/utf-8 thing))
-    ((dict?   thing) (pack-name-values thing))
+    ((bytes?      thing) thing)
+    ((bit-string? thing) (bit-string->bytes thing))
+    ((string?     thing) (string->bytes/utf-8 thing))
+    ((dict?       thing) (pack-name-values thing))
     (else
      (string->bytes/utf-8
       (format "~a" thing)))))
@@ -309,7 +258,7 @@
   (check eq? 128 (bit-string-case #"\200\0\0\200" ([(len :: (fcgi-length))] len))))
 
 
-;;* FCGI records ---------------------------------------------------- *;;
+;;* FCGI ------------------------------------------------------------ *;;
 
 
 (define-generics fcgi
@@ -319,6 +268,7 @@
   (respond fcgi #;to request #;over output-port))
 
 
+;; NOTE There's also FCGI_MAXTYPE but spec only mentions it once without details
 (define (make-record [type 'base]
                      #:id           [id           undefined]
                      #:content      [content      (ht)]
@@ -330,21 +280,18 @@
                      #:app-status   [app-status   undefined]
                      #:proto-status [proto-status undefined])
   (case type
-    ((FCGI_GET_VALUES)        (fcgi-get-values        id type content table))
-    ((FCGI_GET_VALUES_RESULT) (fcgi-get-values-result id type content table))
+    (('base)                  (record                 FCGI_NULL_REQUEST_ID type content))
+    ((FCGI_GET_VALUES)        (fcgi-get-values        FCGI_NULL_REQUEST_ID type content table))
+    ((FCGI_GET_VALUES_RESULT) (fcgi-get-values-result FCGI_NULL_REQUEST_ID type content table))
+    ((FCGI_UNKNOWN_TYPE)      (fcgi-unknown           FCGI_NULL_REQUEST_ID type content unknown-type))
     ((FCGI_BEGIN_REQUEST)     (fcgi-begin-request     id type content role flags))
-    ((FCGI_PARAMS)            (fcgi-params            id type content complete? table))
-    ((FCGI_STDIN)             (fcgi-stdin             id type content))
-    ((FCGI_STDOUT)            (fcgi-stdout            id type content))
-    ((FCGI_STDERR)            (fcgi-stderr            id type content))
-    ((FCGI_DATA)              (fcgi-data              id type content))
     ((FCGI_ABORT_REQUEST)     (fcgi-abort-request     id type content))
     ((FCGI_END_REQUEST)       (fcgi-end-request       id type content app-status proto-status))
-    ((FCGI_UNKNOWN_TYPE)      (fcgi-unknown           id type content unknown-type))
-    (('base)                  (record                 id type content))
-    ;; Spec only mentions it once without providing any detail
-    ;; ((FCGI_MAXTYPE)           (fcgi-maxtype id type content))
-    ))
+    ((FCGI_PARAMS)            (fcgi-params            id type content complete? table))
+    ((FCGI_STDIN)             (fcgi-stdin             id type content complete?))
+    ((FCGI_STDOUT)            (fcgi-stdout            id type content complete?))
+    ((FCGI_STDERR)            (fcgi-stderr            id type content complete?))
+    ((FCGI_DATA)              (fcgi-data              id type content complete?))))
 
 
 ;; TODO wonder if I could extend some kind of stream interface to stream-record,
@@ -371,98 +318,74 @@
   request)
 
 
-;; NOTE parse and pack for fcgi-get-values, fcgi-get-values-result and fcgi-params
-;; are almost exactly the same, so we pull impl out and reuse
-(define (parse-fcgi/name-values record in)
-  (let ((clen (get: record 'clen))
-        (plen (get: record 'plen)))
-    (bit-string-case (read-bytes (+ clen plen) in)
-      ([(params :: binary bytes clen) (_ :: bytes plen)]
-       (set! params (bit-string->bytes params))
-       (set: record 'body params)
-       (cond
-         ((fcgi-get-values? record)
-          (set-fcgi-get-values-table! record (parse-name-values params)))
-
-         ((stream-record? record)
-          (when (zero? clen)
-            (set-stream-record-complete? true)))))
-      (else
-       (error "Failed to parse" (object-name record))))
-    record))
+;;** - records ------------------------------------------------------ *;;
 
 
-(define (pack-fcgi/name-values record content)
-  (set! content
-        (pack-name-values
-         (cond
-           ((hash? content) content)
-           ((fcgi-params? record) (fcgi-params-table record))
-           ((fcgi-get-values? record) (fcgi-get-values-table record)))))
-  (define clen (bytes-length content))
-  (define-values (plen padding content) (pad content))
-  (define header (ht ('version 1)
-                     ('type (record-type record))
-                     ('id (or (record-id record) FCGI_NULL_REQUEST_ID))
-                     ('clen clen)
-                     ('plen plen)))
-  (bit-string->bytes
-   (bit-string
-    (header :: (fcgi-header))
-    (content :: binary))))
-
-
-;; fcgi records
-(struct fcgi-stdout stream-record ()      #:mutable)
-(struct fcgi-stderr stream-record ()      #:mutable)
-(struct fcgi-data   stream-record ()      #:mutable)
-(struct fcgi-abort-request record        ()      #:mutable)
-(struct fcgi-end-request   record (app-status proto-status) #:mutable)
-(struct fcgi-unknown           management-record (type)  #:mutable)
-
-
-;;** - fcgi-get-values[-result] ------------------------------------- *;;
-
-
-(struct fcgi-get-values management-record (table) #:mutable
+(struct record (id type content) #:mutable
 
   #:methods gen:fcgi
 
-  ((define parse parse-fcgi/name-values)
-   (define pack pack-fcgi/name-values)
-   ;; NOTE connection-writer will respond with appropriate FCGI_GET_VALUES_RESULT
-   (define (deliver record connection)
-     (thread-send (connection-writer connection) record)
-     record)))
+  ((define/generic delegate-parse parse)
+   (define (parse self in)
+     (bit-string-case (read-bytes 8 in)
+       ([(record :: (fcgi-header))] (delegate-parse record in))
+       (else (error "Failed to parse fcgi-header"))))
+
+   (define (pack record content)
+     (set! content (bytes-of content))
+     (define clen (bytes-length content))
+     (define-values (plen padding content) (pad content))
+     (define header (ht ('version 1)
+                        ('type (record-type record))
+                        ('id (record-id record))
+                        ('clen clen)
+                        ('plen plen)))
+     (bit-string->bytes
+      (bit-string
+       (header :: (fcgi-header))
+       (content :: binary)))))
+
+  #:methods gen:dict
+
+  ;; TODO Consider not implementing methods I may never use
+
+  ((define/generic super-dict-ref dict-ref)
+   (define (dict-ref dict key [default (λ () undefined)])
+     (super-dict-ref (record-content dict) key default))
+
+   (define/generic super-dict-set! dict-set!)
+   (define (dict-set! dict key v)
+     (super-dict-set! (record-content dict) key v))
+
+   (define/generic super-dict-remove! dict-remove!)
+   (define (dict-remove! dict key)
+     (super-dict-remove! (record-content dict) key))
+
+   (define/generic super-dict-iterate-first dict-iterate-first)
+   (define (dict-iterate-first dict)
+     (super-dict-iterate-first (record-content dict)))
+
+   (define/generic super-dict-iterate-next dict-iterate-next)
+   (define (dict-iterate-next dict pos)
+     (super-dict-iterate-next (record-content dict) pos))
+
+   (define/generic super-dict-iterate-key dict-iterate-key)
+   (define (dict-iterate-key dict pos)
+     (super-dict-iterate-key (record-content dict) pos))
+
+   (define/generic super-dict-iterate-value dict-iterate-value)
+   (define (dict-iterate-value dict pos)
+     (super-dict-iterate-value (record-content dict) pos)))
+
+  #:methods gen:custom-write
+
+  ((define write-proc
+     (make-constructor-style-printer
+      (λ (self) 'record)
+      (λ (self) (list (record-id self) (record-content self)))))))
 
 
-(struct fcgi-get-values-result fcgi-get-values () #:mutable
-
-  #:methods gen:fcgi
-
-  ((define parse parse-fcgi/name-values)
-   (define pack pack-fcgi/name-values)
-   ;; NOTE this is to be called by connection-writer. Just being consistent.
-   (define (deliver record connection)
-     ;; TODO probably want it best effort without blocking
-     (write-bytes (pack record) (connection-out connection))
-     record)))
-
-
-(module+ test
-  (define get-values-table
-    (ht ("FCGI_MAX_CONNS" "")
-        ("FCGI_MAX_REQS" "")
-        ("FCGI_MPXS_CONNS" "")))
-
-  (define get-values-message
-    (pack (make-record FCGI_GET_VALUES) get-values-table))
-
-  (check equal? get-values-table (with-input-from-bytes get-values-message
-                                   (parse (make-record) (current-input-port)))))
-
-
-;;** - fcgi-begin-request ------------------------------------------- *;;
+;;*** == fcgi-begin-request ----------------------------------------- *;;
 
 
 (struct fcgi-begin-request record (role flags) #:mutable
@@ -480,20 +403,7 @@
         (error "Failed to parse fcgi-begin-request")))
      record)
 
-
-   (define (pack fcgi content)
-     (define clen (bytes-length content))
-     (define-values (plen padding content) (pad content))
-     (define header (ht ('version 1)
-                        ('type FCGI_BEGIN_REQUEST)
-                        ('id (record-id fcgi))
-                        ('clen clen)
-                        ('plen plen)))
-     (bit-string->bytes
-      (bit-string
-       (header :: (fcgi-header))
-       (content :: binary))))
-
+   ;; (delegate pack to record)
 
    (define (deliver record connection)
      ;; TODO check for duplicate id in requests
@@ -504,7 +414,10 @@
                     (ht)
                     (let-values ((source sink) (make-pipe 65535)) (stdin source sink))
                     (let-values ((source sink) (make-pipe 65535)) (stdout source sink))
-                    (let-values ((source sink) (make-pipe 65535)) (stderr source sink)))))))
+                    (let-values ((source sink) (make-pipe 65535)) (stderr source sink))
+                    (let-values ((source sink) (make-pipe 65535)) (data source sink))
+                    ;; no thread running yet
+                    undefined)))))
 
 
 (module+ test
@@ -517,7 +430,202 @@
   (check-pred hash? (parse-begin-request begin-request-message)))
 
 
-;;** - fcgi-params -------------------------------------------------- *;;
+;;*** == fcgi-abort-request ----------------------------------------- *;;
+
+
+(struct fcgi-abort-request record () #:mutable
+
+  ((define (parse record in)
+     ;; simply throw away payload if any
+     (read-bytes (+ (get: record 'clen) (get: record 'plen plen)) in)
+     record)
+
+   ;; (delegate pack to record)
+
+   (define (deliver record connection)
+     (define request (request-of #:record record connection))
+     (if (and (request? request) (request-thread request))
+         ;; TODO request already running, notify it (but why?)
+         (thread-send (request-thread request) record)
+         ;; request not running, let connection-writer deal with it
+         (thread-send
+          (connection-writer connection)
+          (make-record
+           FCGI_END_REQUEST
+           #:id (record-id record)
+           #:app-status 1
+           #:proto-status (connection-status connection)))))))
+
+
+;;*** == fcgi-end-request ------------------------------------------- *;;
+
+
+(struct fcgi-end-request   record (app-status proto-status) #:mutable
+
+  #:methods gen:fcgi
+
+  ((define (parse record in)
+     (define body (read-bytes 8 in))
+     (bit-string-case body
+       ([(app-status :: integer bytes 4) proto-status (_ :: bytes 3)]
+        (set-fcgi-end-request-app-status! record app-status)
+        (set-fcgi-end-request-proto-status! record proto-status)
+        (set: record 'body body))
+       (else
+        (error "Failed to parse" (object-name record))))
+     record)
+
+   (define (pack record content)
+     (define app-status
+       (if (hash? content)
+           (get: content 'app-status)
+           (fcgi-end-request-app-status record)))
+
+     (define proto-status
+       (if (hash? content)
+           (get: content 'proto-status)
+           (fcgi-end-request-proto-status record)))
+
+     (define header (ht ('version 1)
+                        ('type (record-type record))
+                        ('id (record-id record))
+                        ('clen 8)
+                        ('plen 0)))
+
+     (bit-string->bytes
+      (bit-string
+       (header :: (fcgi-header))
+       (app-status :: bytes 4)
+       proto-status
+       (0 :: bytes 3))))
+
+   (define (deliver record connection)
+     (write-bytes (pack record) (connection-out connection))
+     record)))
+
+
+;;** - management-records ------------------------------------------- *;;
+
+
+(struct management-record record () #:mutable
+
+  #:methods gen:fcgi
+
+  ((define (parse record in)
+     (let ((clen (get: record 'clen))
+           (plen (get: record 'plen)))
+       (bit-string-case (read-bytes (+ clen plen) in)
+         ([(params :: binary bytes clen) (_ :: bytes plen)]
+          (set! params (bit-string->bytes params))
+          (set: record 'body params)
+          (set-fcgi-get-values-table! record (parse-name-values params)))
+         (else
+          (error "Failed to parse" (object-name record))))
+       record))
+
+   ;; (delegate pack to record)
+
+   ;; (delegate deliver to specialized children structs)
+   ))
+
+
+;;*** == fcgi-get-values ------------------------------------------- *;;
+
+
+(struct fcgi-get-values management-record (table) #:mutable
+
+  #:methods gen:fcgi
+
+  (;; (delegate parse to management-record)
+
+   ;; (delegate pack to management-record)
+
+   (define (deliver record connection)
+     (thread-send (connection-writer connection) record)
+     record)))
+
+
+;;*** == fcgi-get-values-result ------------------------------------ *;;
+
+
+(struct fcgi-get-values-result fcgi-get-values () #:mutable
+
+  #:methods gen:fcgi
+
+  (;; (delegate parse to management-record)
+
+   ;; (delegate pack to management-record)
+
+   (define (deliver record connection)
+     (write-bytes (pack record) (connection-out connection))
+     record)))
+
+
+;;*** == fcgi-unknown ---------------------------------------------- *;;
+
+
+(struct fcgi-unknown management-record (type)  #:mutable
+
+  #:methods gen:fcgi
+
+  ((define (parse record in)
+     (let ((clen (get: record 'clen))
+           (plen (get: record 'plen)))
+       (bit-string-case (read-bytes (+ clen plen) in)
+         ([type (_ :: bytes 7) (_ :: bytes plen)]
+          (set: record 'body type)
+          (set-fcgi-unknown-type! record type))
+         (else
+          (error "Failed to parse" (object-name record))))
+       record))
+
+   ;; (delegate pack to management-record)
+
+   (define (deliver record connection)
+     (write-bytes (pack record) (connection-out connection))
+     record)))
+
+
+(module+ test
+  (define get-values-table
+    (ht ("FCGI_MAX_CONNS" "")
+        ("FCGI_MAX_REQS" "")
+        ("FCGI_MPXS_CONNS" "")))
+
+  (define get-values-message
+    (pack (make-record FCGI_GET_VALUES) get-values-table))
+
+  (check equal? get-values-table (with-input-from-bytes get-values-message
+                                   (parse (make-record) (current-input-port)))))
+
+
+;;** - stream-records ----------------------------------------------- *;;
+
+
+(struct stream-record record (complete?) #:mutable
+
+  #:methods gen:fcgi
+
+  ((define (parse record in)
+     (let ((clen (get: record 'clen))
+           (plen (get: record 'plen)))
+       (bit-string-case (read-bytes (+ clen plen) in)
+         ([(body :: binary bytes clen) (_ :: bytes plen)]
+          (set! body (bit-string->bytes body))
+          (set: record 'body body)
+          (when (zero? clen)
+            (set-stream-record-complete? true)))
+         (else
+          (error "Failed to parse" (object-name record))))
+       record))
+
+   ;; (delegate pack to record)
+
+   ;; (delegate deliver to specialized children structs)
+   ))
+
+
+;;*** == fcgi-params ----------------------------------------------- *;;
 
 
 ;; TODO With current implementation we have to receive all fcgi-params packets to
@@ -530,12 +638,10 @@
 
   #:methods gen:fcgi
 
-  ((define parse parse-fcgi/name-values)
-   ;; NOTE technically the the content table to be packed as name-values maybe too
-   ;; large for a single packet and would have to be split, but we'll only ever
-   ;; use pack here for testing and implement it to offer consistent interface. If
-   ;; this ever changes would need to consider packing into multiple packets.
-   (define pack pack-fcgi/name-values)
+  (;; (delegate parse to stream-record)
+
+   ;; (delegate pack to stream-record)
+
    (define (deliver record connection)
      (define request (request-of #:record record connection))
      (push! record #;onto request)
@@ -559,41 +665,16 @@
      record)))
 
 
-;;** - fcgi-stdin --------------------------------------------------- *;;
+;;*** == fcgi-stdin ------------------------------------------------ *;;
 
 
 (struct fcgi-stdin  stream-record () #:mutable
 
   #:methods gen:fcgi
 
-  ((define (parse record in)
-     (let ((clen (get: record 'clen))
-           (plen (get: record 'plen)))
-       (bit-string-case (read-bytes (+ clen plen) in)
-         ([(input :: binary bytes clen) (_ :: bytes plen)]
-          (set! input (bit-string->bytes input))
-          (set: record 'body input)
-          (when (zero? clen)
-            (set-stream-record-complete? true)))
-         (else
-          (error "Failed to parse" 'fcgi-stdin)))
-       record))
+  (;; (delegate parse to stream-record)
 
-
-   (define (pack record content)
-     (set! content (bytes-of content))
-     (define clen (bytes-length content))
-     (define-values (plen padding content) (pad content))
-     (define header (ht ('version 1)
-                        ('type FCGI_STDIN)
-                        ('id (record-id record))
-                        ('clen clen)
-                        ('plen plen)))
-     (bit-string->bytes
-      (bit-string
-       (header :: (fcgi-header))
-       (content :: binary))))
-
+   ;; (delegate pack to stream-record)
 
    (define (deliver record connection)
      (define request (request-of #:record record connection))
@@ -653,6 +734,68 @@
   (check equal? #"world!" (get: (parse (make-request) fake-request-stdin-port) 'body))
 
   (check stream-request-complete? (parse (make-request) fake-request-stdin-port)))
+
+
+
+;;*** == fcgi-stdout ----------------------------------------------- *;;
+
+
+(struct fcgi-stdout stream-record () #:mutable
+
+  #:methods gen:fcgi
+
+  (;; (delegate parse to stream-record)
+
+   ;; (delegate pack to stream-record)
+
+   (define (deliver record connection)
+     ;; TODO probably want it best effort without blocking
+     (write-bytes (pack record) (connection-out connection))
+     record)))
+
+
+;;*** == fcgi-stderr ----------------------------------------------- *;;
+
+
+(struct fcgi-stderr stream-record () #:mutable
+
+  #:methods gen:fcgi
+
+  (;; (delegate parse to stream-record)
+
+   ;; (delegate pack to stream-record)
+
+   (define (deliver record connection)
+     ;; TODO probably want it best effort without blocking
+     (write-bytes (pack record) (connection-out connection))
+     record)))
+
+
+;;*** == fcgi-data ------------------------------------------------- *;;
+
+
+(struct fcgi-data stream-record () #:mutable
+
+  #:methods gen:fcgi
+
+  (;; (delegate parse to stream-record)
+
+   ;; (delegate pack to stream-record)
+
+   ;; TODO like stdin but we write to request-data pipe. Since this is only ever
+   ;; used in filter role I'm not sure if its ever used in the wild at all.
+   (define (deliver record connection)
+     (define request (request-of #:record record connection))
+     (push! record #;onto request)
+     (when (stream-record-complete? record)
+       (let* ((stream (bytes->string/utf-8
+                       (assemble-stream record #;from connection))))
+         (set: record 'body stream)
+         ;; throw-away thread just to push content to request
+         (thread
+          (thunk
+           (write-bytes stream (request-data request))))))
+     record)))
 
 
 ;;* Connection ------------------------------------------------------ *;;
