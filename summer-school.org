@@ -1,0 +1,136 @@
+* Wokshop proposal
+
+We'll be implementing FastCGI backend (aka server, aka protocol, aka dispatcher)
+in Racket. It'll be a full-featured implementation true to the [[http://www.mit.edu/~yandros/doc/specs/fcgi-spec.html][spec]]. FCGI is a
+binary protocol so a bit of a drag to implement compared to SCGI (e.g. as was [[https://docs.racket-lang.org/scgi/][done
+by Neil]]). However, it benefits from being well supported by web-servers. Both
+Nginx and OpenBSD HTTPD ship it. It isn't terribly complex so one can explain it
+in under 5 minutes. Because of its relatively low level binary nature yet
+application level purpose, implementation spans multiple layers of Racket goodness
+many of which can be designed as DSLs or Racket extensions:
+- modeling with hash-tables, structs and ultimately our own associative data
+  structures;
+- built-in simple inheritance and generic interfaces, then a possibly a better
+  solution that leverages our own data-structures;
+- bit twiddling simplified with pattern-matching instead of shifting, masking etc,
+  extending Racket match, making bit match work for streaming data, custom bit
+  patterns;
+- continuations;
+- taking over Racket reader to implement fancy syntax for our data-structures and
+  exposing it as #lang;
+- concurrency with threads, mailboxes and syncable events;
+- resource management with custodians;
+- logging;
+- visualising FastCGI packet flow with generated UML diagrams;
+- designing a high-level "web-framework" language on top of FCGI.
+
+Workshop is meant to be hands on and much less "academic" so that students may see
+how Racket is used "in anger", what tools it provides, how encouraging and helpful
+it maybe to not "program Python/C/Go" in Racket but think in languages, etc.
+
+* Workshop outline
+
+** Bit-patterns
+
+Match binary data with bit-patterns, generate binary data from bit-patterns. Tony
+shows the way with [[https://github.com/tonyg/racket-bitsyntax][racket-bitsyntax]]. We could implement a small subset then use
+Tony's impelmentation. Extend Racket match with bit-patterns. Extend Tony's
+bitsyntax-case with custom patterns. Implement streaming match on ports a-la
+regexp-match.
+
+** Data modeling
+
+Try with hash-tables. Point out some weaknesses: no identity, so e.g. generics are
+out; a bit too ad-hoc for the task at hand; no obvious way to signal value
+missing except throwing (should we return undefined? How can we make it work
+reliably?).
+
+Try structs + single inheritance + generics. Point out some weaknesses: clunky
+associative operations; built-in struct inheritance is too limiting; struct
+getters and setters are way too static; too rigid for data modeling but rich and
+excellent for extending Racket with new types of values while hiding
+implementation details.
+
+Having experienced some pain with the above do some interlude programming:
+
+*** Interlude: implement gen:associative for hash-tables, alists, possibly structs
+
+Simplify get and set operations on associative data structures and provide unified
+interface.
+
+*** Interlude: implement Clojure-style ad-hoc multimethods
+
+We can provide implementations of hierarchies and isa-dispatch, so that students
+may focus on implementing defmulti and defmethod macros. Entire implementation can
+be kept well under 200-300 loc.
+
+** Lua-style tables
+
+Implement Lua-style tables with meta-tables. Implement prototypal inheritance,
+single and multiple inheritance, classes. Show how dynamic dispatch falls out
+almost for free. Sprinkle some macro magic to remove boilerplate in the above
+mentioned patterns.
+
+*** Extra: fancy syntax for tables
+
+Implement ~#lang racket/tables~.
+
+~{(k1 v1) (k2 v2)}~ to construct tables. Extended constructor that lets you
+specify meta-table and control implementation details (e.g. mutability) with
+keyworded options:
+
+#+begin_src racket
+  {Metaclass #:kw1 opt1
+             #:kw2 opt2
+             (k1 v1)
+             (k2 v2)}
+#+end_src
+
+Extra getter syntax for symbolic keys e.g. t = ~{('k1 v)}~ can be accessed with
+~t.k1~, ditto for setting 'k1 value.
+
+Extra define and method call syntax:
+#+begin_src racket
+  (define T {})
+  (define T.const 42)
+  (define (T.method arg)
+    (+ T.const arg))
+  (T.method 1)
+
+  ;; : implies passing receiver as the first (not shown) parameter
+  (define (T:oopmethod arg)
+    (+ self.const arg))
+  (T:oopmethod 1)
+#+end_src
+
+** Build FastCGI dispatcher
+
+*** Full multiplexing: connections and multiple requests per connection
+
+Although explicitly allowed in the spec no web-server with wide adoption
+implements full multiplexing. However, it isn't difficult to implement and exposes
+students to Racket concurrency primitives: threads (main to accept connections,
+reader, writer, request handler); mailboxes; ports and other synchronizable
+events; possibly our own custom events.
+
+*** Resource management with custodians
+
+*** Logging with loggers
+
+*** Tests with module+ and rackunit
+
+** Visualize web-server <-> fcgi packet flow
+
+Build a small GUI that generates UML diagrams from our fcgi logs.
+
+** Finally design Application interface to fcgi
+
+We are very much into web-framework territory here. What does it mean to build a
+FastCGI application? Is it php style write whatever into stdout? Could we think of
+something cooler? An ~#lang fcgi~ of some kind? RESTless web <-> app with
+serializable continuations maybe (your cue Jay)?
+
+** Face off against other implementations
+
+Run Apache bench. How badly are we doing against [[https://kristaps.bsd.lv/kcgi/][implementation in C]]? Can we spot
+problems by profiling?
