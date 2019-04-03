@@ -1,0 +1,157 @@
+
+* FastCGI
+
+Turns out that your typical webserver with fastcgi doesn't usually implement
+multiplexing that the fastcgi standard mentions. That is no well known web server
+implements request multiplexing on the same connection to the fastcgi backend. At
+most you can hope that each new request gets a new connection to the fastcgi
+backend and thus we get some multiplexing.
+
+I'm still not quite clear if Nginx does connection multiplexing. Reports are
+varied, so I guess I'll just have to try and see. See [[https://forum.nginx.org/read.php?11,267428][this interesting thread]]
+discussing a problem where Nginx keeps sending requests on the same connection but
+serially, that is one request must be complete before the next is sent onto the
+same connection which obviously is far from optimal.
+
+Note re implementation. No full request multiplexing on the same connection makes
+implementation easier IMO. Say, we had such multiplexing, then multiple "workers"
+could potentially write to stdout concurrently about different requests. That's ok
+as long as bytes from multiple messages don't interleave. This requires some form
+of synchronisation: every write must put one full FastCGI message on the port
+before anyone other worker is allowed to write, else the web server receive those
+bytes interleaved and won't be able to parse as fastcgi chunks. This is my current
+understanding anyway.
+
+** TODO What does OpenBSD HTTPD does? Does it multiplex connections at least?
+
+** TODO I'll have to confirm Nginx behavior: does it multiplex connections?
+
+One way to do it is to run /ab/ with 5 simultaneous requests, then say 250
+requests. Meaningful slowdown would hint at no multiplexing at all. If Nginx opens
+connection per request than there should be no slowdown assuming my backend is
+non-blocking i.e. uses multiple threads. Read above mentioned thread carefully, I
+may need to configure Nginx as "load-balancer" or some such.
+
+I'll have to google some more if Nginx doesn't multiplex connections as I expect.
+Solve by employing another trick like proxying or something.
+
+* Nginx
+
+** OSX
+
+nginx.conf: [[/usr/local/etc/nginx/nginx.conf][/usr/local/etc/nginx/nginx.conf]]
+logs: [[/usr/local/var/log/nginx][/usr/local/var/log/nginx/]]
+
+Now try visiting:
+- [[http://localhost:8080][index]] - should retrieve static index.html
+- [[http://localhost:8080/index.rkt][index.rkt]] - passthrough to fastcgi on 127.0.0.1:9000
+
+FastCGI process must be started independently of Nginx which doesn't do that.
+
+* Racket
+
+I'll collect some annoyances about Racket the language and the programming
+experience it brings to the table. Hopefully I can fix most of them or at least
+wine about them and see if there's anyone who share in the chagrin.
+
+** Error location reporting in (module+ test ...)
+
+is utterly useless. Errors themselves are ok, but location reported is the
+beginning of the module i.e. line:1:1 or some such. Why? Is this /racket-mode/
+only?
+
+*** TODO Ask the mailing list
+
+[[https://groups.google.com/forum/#!topic/racket-users/aCQwqCTY42U][thread]]
+
+*** DONE reproduce in DrRacket
+CLOSED: [2019-04-03 Wed 12:12]
+
+** racket-mode imenu support
+
+is present but very basic and doesn't even attempt to capture Racket specific
+constructs e.g. no ~struct~ definitions, everything is reported as a /Function/.
+
+*** TODO improve and PR upstream
+
+** structs and generics have significant constraints but is that by design?
+
+In my limited experience with both structs and generics neither quite match
+expectation coming from records, generic methods or protocols in e.g. Elisp, CL or
+Clojure. Structs limit inheritance to single and it pretty much just amounts to
+inheriting a bunch of fields and adding some extra predicates that let you test if
+a subtype happens to be a parent type. Generics aren't really what you expect
+since (a) there's no way to "fall through" the inheritance chain by not providing
+an implementation, and (b) no way to explicitly invoke some specific
+implementation. ~#:fallbacks~ isn't of much help since it covers all unimplemented
+cases so you can't just pick and choose. You'd think you could do something like
+this:
+
+#+begin_src racket
+  (require racket/struct
+           racket/generic)
+
+  (define-generics foobar
+    (run foobar)
+    #:defaults
+    ((bar?
+       (define (run self) (foo-a self)))))
+
+  (struct foo (a)
+    #:methods gen:foobar
+    ((define (run s) (foo-a s))))
+
+  (struct bar foo (b)
+    #:methods gen:foobar
+    ())
+
+  (run (foo 0))
+  ;; => 0
+  (run (bar 1 2))
+  ;; => bar?: undefined;
+  ;;  cannot reference an identifier before its definition
+
+#+end_src
+
+but nope, all definitions are very much lexical, ~bar?~ hasn't been defined yet.
+Indeed generics are highly "lexical" or perhaps "static" is the word: attached to
+a particular struct definition lexically. So you must define them where you define
+the struct itself and you must employ the ~(define/generic super-method method)~
+trick if you want to "dispatch" rather than refer to a type specific
+implementation being defined.
+
+None of this is to say that either Racket structs or generics are somehow wrong. I
+conjecture that was a deliberate design decision whereupon you give up something
+in favor of something else: structs aren't inteded as generic containers you use
+to model a bunch of data in your domain - they aren't glorified hash-tables with
+identity, rather you only ever use them to extend Racket with truly new data
+types - values that need or could be first class on their own - then necessarily
+you priorities information hiding, tainting, declarations with props, etc - all
+the things Racket structs have that probably no other language offers; generics
+are there very much to support this intentional use of structs, not to give you
+flexibility of multiple dispatch with delegation, :before and :after methods etc.
+In fact, conjecture continues, about the only use case that suits their feature
+set (with all the constraints) is to group low-level functions that your type must
+implement for some higher-level API to work with your data. Period. In that world,
+yes, those functions may as well, or even better be, lexically attached to
+respective struct types, yada yada.
+
+If this observation is true, then I feel like maybe its worth making that explicit
+somewhere in the Guide if only for the sake of those beginners in the language who
+might not be so inexperienced with programming in general and may already have a
+bunch of other languages in their toolbox. It's been quite frustrating even if
+illuminating to discover all of the above and internalize things Racket doesn't
+really want you to do while trying to solve a real programming task rather than
+create a toy interpreter that your typical beginner might attempt. Nothing teaches
+you better than attempting to fit a square peg into a round hole. Except it takes
+time, effort and costs you a bunch of grey hair. No complaints, really - you gotta
+learn the language not some abstract concoction you've been running in your head.
+
+A followup observation or perhaps a natural conclusion is that Racket could use
+some light data structure programmers could turn to when hash-tables are too
+ad-hoc, while structs are too rigid. I guess I should build one.
+
+*** TODO Ask the mailing list
+
+Wonder if my conjecture is accurate
+
