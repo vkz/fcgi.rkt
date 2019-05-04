@@ -1,0 +1,40 @@
+* Talk title
+
+#+begin_src racket
+#lang wishful thinking
+(will! (it . be . so))
+#+end_src
+
+* Talk abstract
+
+_Olin Shivers_ once wrote:
+
+#+begin_quote
+Scheme programmers can, and do, routinely write code where they shift between
+multiple languages in the space of a few lines of code.
+#+end_quote
+
+What might solving a real production problem in a language specifically designed
+for building languages that cooperate look like? Racket lets you program by fusing
+multiple DSLs together, reshaping and moulding your language to fit the domain,
+erecting entire towers of languages, in fact, each level closer to the language of
+the desired discourse. Get a glimpse of how this might work by implementing
+something that's simple yet spans a whole range on the abstraction ladder from bit
+twiddling to Web frameworks. Try implementing FastCGI protocol in Racket, but not
+tie yourselves to the defaults that Racket designers blessed us with. Boldly
+employ wishful thinking, borrow readily from other languages, don't rush mapping
+domain vocabulary onto what basic building blocks your language provides -
+actually speak the language of the domain. Do you maybe want prototypes with
+Lua-style metatables? Concise syntax? Single and multiple inheritance with generic
+dispatch? How generic is generic? Multimethods? Full Metaobject Protocol, maybe?
+Beyond Metaobject Protocol? A language of patterns to avoid bit twiddling? That
+one Web framework that speaks the language of the Web yet lets you write plain
+"desktop app" code? Dare say: I wish I could - then make it so.
+
+* Short bio
+
+Dilettante programmer from London who taught himself programming with Racket
+through HtDP and PLAI, did some paid Javascript, which he does not recommend, then
+paid Clojure, which he does. He has now gone back to the roots and writes lots of
+Racket. Former @yandex and @droitfintech. Fall'13 @recursecenter aka @hackerschool
+alum.
