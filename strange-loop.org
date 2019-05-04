@@ -32,6 +32,28 @@ language of patterns to avoid bit twiddling? That one Web framework that speaks
 the language of the Web yet lets you write plain "desktop app" code? Build
 yourself a better language. Dare say: I wish I could - then make it so.
 
+* What will the attendee learn?
+
+Proposed talk is based on my experience implementing FastCGI protocol in Racket
+that went out of hand. Attendees will learn how to implement programming languages
+in Racket and why they might want to do that. Specifically we show:
+- how to extend Racket pattern-matching language with binary patterns,
+- allow user extensions with "higher-order" macros and continuations,
+- show limitations of modeling with ad-hoc data structures and Racket structs,
+- steal a better solution from Lua,
+- roll out a proper programming language in Racket to compete with Racket,
+- implement multiple inheritance and generic dispatch,
+- push it towards Metaobject Protocol,
+- push it even further,
+- finally implement FastCGI protocol in our language,
+- design and implement a web-programming language that talks FastCGI,
+- maybe build a GUI to visualize FCGI packet flow in Racket or/and as a web-app in
+  our #lang fcgi DSL.
+
+Target audience: anyone interested in PLs, macros, Racket. Buddying Lispers coming
+from other dialects: Clojurists may be compelled to compare and contrast their
+data-oriented language with Racket's take that leverages rich macro-system.
+
 * Short bio
 
 Dilettante programmer from London who taught himself programming with Racket
