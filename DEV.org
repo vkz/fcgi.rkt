@@ -1,0 +1,446 @@
+MY PROJECTS  -*- mode: org; fill-column: 87 -*-
+#+CATEGORY: fcgi
+#+STARTUP: content
+#+seq_todo: TODO STARTED(s@/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@)
+#+TAGS: { SCHOOL(s) BLOG(b) }
+#+PROPERTY: Effort_ALL 0 0:10 0:30 1:00 2:00 3:00 4:00 5:00 6:00 7:00
+#+COLUMNS: %40ITEM(Task) %17Effort(Estimated Effort){:} %CLOCKSUM
+
+* Talk
+:PROPERTIES:
+:CATEGORY: RacketCon
+:END:
+
+** Title
+
+#lang wishful thinking
+(will! it be so)
+
+** Bio
+
+Vlad Kozin
+
+Dilettante programmer from London who taught himself programming through HtDP and
+PLAI, did some paid Javascript, which he does not recommend, then paid Clojure,
+which he does. He has now gone back to the roots. Former @yandex and
+@droitfintech. Fall'13 @recursecenter aka @hackerschool alum.
+
+** Ideas
+
+*** #lang bio
+
+short biography on the screen
+
+*** Quote from Zigurat paper by Shivers
+
+*** Quote from SICP video
+
+do slide transition
+- /wishful thinking/ to
+- /#lang wishful thinking/
+
+* FastCGI
+
+Turns out that your typical webserver with fastcgi doesn't usually implement
+multiplexing that the fastcgi standard mentions. That is no well known web server
+implements request multiplexing on the same connection to the fastcgi backend. At
+most you can hope that each new request gets a new connection to the fastcgi
+backend and thus we get some multiplexing.
+
+I'm still not quite clear if Nginx does connection multiplexing. Reports are
+varied, so I guess I'll just have to try and see. See [[https://forum.nginx.org/read.php?11,267428][this interesting thread]]
+discussing a problem where Nginx keeps sending requests on the same connection but
+serially, that is one request must be complete before the next is sent onto the
+same connection which obviously is far from optimal.
+
+Note re implementation. No full request multiplexing on the same connection makes
+implementation easier IMO. Say, we had such multiplexing, then multiple "workers"
+could potentially write to stdout concurrently about different requests. That's ok
+as long as bytes from multiple messages don't interleave. This requires some form
+of synchronisation: every write must put one full FastCGI message on the port
+before anyone other worker is allowed to write, else the web server receive those
+bytes interleaved and won't be able to parse as fastcgi chunks. This is my current
+understanding anyway.
+
+** DEFERRED Does OpenBSD HTTPD do any multiplexing of FCGI?
+CLOSED: [2019-05-18 Sat 13:17]
+
+- State "DEFERRED"   from "TODO"       [2019-05-18 Sat 13:17] \\
+  Need to implement FCGI first
+** DEFERRED Does Nginx do any multiplexing of FCGI?
+CLOSED: [2019-05-18 Sat 13:17]
+
+- State "DEFERRED"   from "TODO"       [2019-05-18 Sat 13:17] \\
+  Need to implement FCGI first
+One way to do it is to run /ab/ with 5 simultaneous requests, then say 250
+requests. Meaningful slowdown would hint at no multiplexing at all. If Nginx opens
+connection per request than there should be no slowdown assuming my backend is
+non-blocking i.e. uses multiple threads. Read above mentioned thread carefully, I
+may need to configure Nginx as "load-balancer" or some such.
+
+I'll have to google some more if Nginx doesn't multiplex connections as I expect.
+Solve by employing another trick like proxying or something.
+
+* Nginx
+
+** OSX
+
+nginx.conf: [[/usr/local/etc/nginx/nginx.conf][/usr/local/etc/nginx/nginx.conf]]
+logs: [[/usr/local/var/log/nginx][/usr/local/var/log/nginx/]]
+
+Now try visiting:
+- [[http://localhost:8080][index]] - should retrieve static index.html
+- [[http://localhost:8080/index.rkt][index.rkt]] - passthrough to fastcgi on 127.0.0.1:9000
+
+FastCGI process must be started independently of Nginx which doesn't do that.
+
+* Racket
+
+I'll collect some annoyances about Racket the language and the programming
+experience it brings to the table. Hopefully I can fix most of them or at least
+wine about them and see if there's anyone who share in the chagrin.
+
+** TIL embedding in Racket with unquote escapes
+
+a-la what Shivers did with his embedded langs is quite possible by redefining
+~#%module-begin~ with one that implicitly quotes module body, then any unquote
+inside will escape into whatever initial module language is. See /html.rkt/
+examples in [[file:~/Code/racket/racket/doc/guide/module-languages.html#%2528part._implicit-forms%2529][Implicit Form Bindings]]. This is probably not sufficient for a lang
+embedding though, i.e. what bindings do we have in the unquote, can we refer to
+the quoted template bindings etc. After all we'd probably want the result value
+somehow usable in our embedded language.
+
+Incidentally the same /html.rkt/ example shows a pretty neat way of HTML
+templating in Racket. Could be scribble does even better, but still.
+
+** TIL [[file:~/Code/racket/racket/doc/guide/module-languages.html#%2528tech._module._language%2529][module languages]] have very specific meaning
+
+they are like _racket_ or _racket/base_ at least syntactically i.e. s-exp syntax
+assumed, they simply provide initial bindings and may appear in module initial
+path e.g. ~(module name init-module-path . body)~
+
+#lang is more general and requires reader and expander and bindings etc, but in a
+simple case where reader is essentially that of racket, we could use module
+language with #lang by folloting it with ~s-exp~ meta language e.g.
+
+#+begin_src racket
+#lang s-exp module/lang/here
+#+end_src
+
+** TIL #%top wraps unbound identifiers
+
+Which may come in handy. Say, allow unbound identifiers in certain positions and
+treat them as symbols (implicitly quoted):
+
+#+begin_src racket
+(table method . args)
+;; =>
+(table :method . args)
+;; because method => #%top and we can redefine #%top to produce :method
+#+end_src
+
+** TIL Generics don't delegate to ancestors
+
+when struct doesn't implement a method Racket does not attempt to dispatch down
+the inheritance chain, which makes them eh ... not very useful, or perhaps just
+limited to very specific set of tasks.
+
+#+begin_src racket
+  (define-generics foobar
+
+    (run foobar)
+  
+    ;; NOTE this works but this effectively defaults any missing method with no
+    ;; regard to the type of struct
+    #:fallbacks
+    ((define (run self) (foo-a self)))
+
+    ;; NOTE this won't work at all cause bar? wouldn't have been defined yet
+    ;; #:defaults
+    ;; ((bar?
+    ;;   (define (run self) (foo-a self))))
+    )
+
+  (struct foo (a)
+    #:methods gen:foobar
+    ((define (run s) (foo-a s))))
+
+  (struct bar foo (b)
+    #:methods gen:foobar
+    ())
+
+  (run (foo 0))
+  ;; => 0
+  (run (bar 1 2))
+  ;; => run: not implemented for #<bar>
+  ;; comment
+
+#+end_src
+
+*** Alternative generics and dispatch in Racket
+
+So, this section will talk about the limitations I ran while attempting to use
+Racket structs and generics. See [[*TIL Generics don't delegate to ancestors][TIL Generics don't delegate to ancestors]] section
+that gives an example. In a nutshell, I failed to implement fcgi protocol with
+structs and generics because I prematurely assumed they would behave roughly as
+records and generics in other Lisps e.g. CL, Elisp, Clojure. Painfully learnt my
+lesson.
+
+We'll talk about some alternatives that exist in Racket.
+
+**** [[https://pkgs.racket-lang.org/package/gls][GLS: Generic Little System]]
+
+Documentation is kinda sparse, not enough examples and it does not discuss all of
+the semantics, definitely short of the exact details of dispatch. Looking at the
+code it is possible but not easy to restore the model. I don't get the impression
+that its robust and seen any significant use. Test cases in the source might help,
+but I really don't want to bother. IIUC it is roughly a mashup of CLOS with
+predicate dispatch, some predicate subtyping that could use clarification and the
+system described in [[https://dspace.mit.edu/handle/1721.1/6686][Better Patterns through Reflection]] paper. IIUC implementation
+follows that of the paper. So maybe worth looking into it esp with regards to
+total ordering of methods.
+
+The paper could be a pretty cool test case and tutorial for my tables
+implementation. Cause it basically re-implements all Design Patterns in Scheme +
+this dispatch extension.
+
+One obvious limitation of GLS: per argument dispatch, that is it dispatches based
+on each argument type (or predicate) left to right. Compare this to Clojure
+multimethods that computes a dispatch value from the list of gf parameters and
+that value is used to dispatch. IMO this makes Clojure multimethods a more general
+system than e.g. GLS, cause we can always push all args into a vector and dispatch
+on that, which would be dispatch equivalent to GLS.
+
+**** [[https://pkgs.racket-lang.org/package/swindle][Swindle]]
+
+#+begin_quote
+Swindle extends Racket with many additional features. The main feature that
+started this project is a CLOS-like object system based on [[http://community.schemewiki.org/?Tiny-CLOS][Tiny-CLOS]] from Xerox,
+but there is a lot more.
+#+end_quote
+
+Apparently Tiny-CLOS is a CLOS implementation in Scheme, and Eli hacked it for
+Racket.
+
+This one is huge and feature rich, ports a ton of stuff from CL including generic
+setters (eg ~setf~), etc. Sadly, it offers almost no documentation and is based on
+MzScheme, so probably wouldn't use what Racket has to offer so many years later. I
+think at this point it serves mainly as inspiration for features and maybe hints
+for how to implement them.
+
+Definitely, some cool stuff to learn from and borrow. Just check the features.
+
+#+begin_quote
+Good integration with the Racket implementation: primitive values have
+corresponding Swindle classes, and struct types can also be used as type
+specializers. A Swindle class will be made when needed, and it will reflect the
+struct hierarchy. In addition, structs can be defined with a Swindle-line
+defstruct syntax which will also make it possible to create these structs with
+make using keyword arguments. (swindle/tiny-clos and swindle/extra)
+#+end_quote
+
+Swindle _defines apparently solid class hierarchy_ that includes Racket base values
+(but probably not contracts)! See [[file:~/Code/swindle/tiny-clos.rkt::;;;%20Built-in%20classes.][tiny-class.rkt]]
+
+**** [[https://docs.racket-lang.org/multimethod/index.html][multimethod]] by Alexis
+
+Multiple dispatch strictly limeted to struct params and some other constraints
+like must be in the same module etc. Basically while MOP embraces multiple
+matching methods and defines rules to disambiguate, /multimethod/ simply prohibits
+such situations. I'd rather live on the wild side and get burnt once in a while.
+
+** How to contribute to Racket main distro packages?
+
+My case was /rackunit/ which resides in a multi-package in a separate repo in
+Racket org on Github. The issue was that I wanted local install of a clone so that
+any changes I make are immediately picked up by other code and nav to definiton
+would take me to my repo clone. Turns out because /rackunit/ is one of the main
+distro packages it is installed in what's called /installation/ scope and it isn't
+that easy to uninstall or replace with locally sourced. Not unless you know proper
+~raco~ incantations.
+
+So, [[https://groups.google.com/forum/#!topic/racket-users/1QF0S26RBkI][I asked the mailing list]].
+
+*** how to do it for reals this time
+
+Since this rackunit repo really has multiple packages inside, we simply need to
+install them all (but not the rackunit root):
+
+#+begin_src sh
+git clone https://github.com/racket/rackunit.git
+cd rackunit
+
+# just install every subdirectory
+~/Code/rackunit $ raco pkg install -j 8 --force -u --type dir rackunit*
+
+# verify
+~/Code/rackunit $ raco pkg show --all --long --rx "rackunit*"
+
+Installation-wide:
+ 
+  ... omitted but rackunit pkgs are still there ...
+ 
+User-specific for installation "development":
+ Package                Checksum    Source
+ rackunit               #f          (link "/Users/russki/Code/rackunit/rackunit")
+ rackunit-doc           #f          (link "/Users/russki/Code/rackunit/rackunit-doc")
+ rackunit-gui           #f          (link "/Users/russki/Code/rackunit/rackunit-gui")
+ rackunit-lib           #f          (link "/Users/russki/Code/rackunit/rackunit-lib")
+ rackunit-plugin-lib    #f          (link "/Users/russki/Code/rackunit/rackunit-plugin-lib")
+ rackunit-test          #f          (link "/Users/russki/Code/rackunit/rackunit-test")
+ rackunit-typed         #f          (link "/Users/russki/Code/rackunit/rackunit-typed")
+#+end_src
+
+And presto code changes are now picked up and jump to definition finally works.
+
+***  +Basically, this command did it for me:+
+
+-------------------------------------------------
+*NOPE I mean it works but [[https://groups.google.com/d/msg/racket-users/1QF0S26RBkI/AFZ3vkuIBgAJ][read my own reply here]]*
+-------------------------------------------------
+
+#+begin_src sh
+~/Code/rackunit $ raco pkg install -j 8 --force \
+ --catalog https://pkgs.racket-lang.org -i --clone . rackunit 
+
+# to check the result: note the path: of every relevant package
+~/Code/rackunit $ raco link -l rackunit*
+ collection: "rackunit"  path: "/Users/russki/Code/rackunit/rackunit"
+ collection: "rackunit-doc"  path: "/Users/russki/Code/rackunit/rackunit-doc"
+ collection: "rackunit-gui"  path: "/Users/russki/Code/rackunit/rackunit-gui"
+ collection: "rackunit-lib"  path: "/Users/russki/Code/rackunit/rackunit-lib"
+ collection: "rackunit-plugin-lib"  path: "/Users/russki/Code/rackunit/rackunit-plugin-lib"
+ collection: "rackunit-test"  path: "/Users/russki/Code/rackunit/rackunit-test"
+ collection: "rackunit-typed"  path: "/Users/russki/Code/rackunit/rackunit-typed"
+#+end_src
+
+Thing to keep in mind is that after that clone ~raco~ will keep using whatever URL
+you first gave it, so if it isn't your fork, well. But IIUC you could just use the
+usual /git workflow/ with pull and push and avoid ~raco pkg update~. Technically
+you can supply custom URL after the fact but it doesn't pick up on multiple
+packages that may share the same repo (as is exactly the case with /rackunit/):
+
+#+begin_quote
+Either way, when raco pkg update pulls updates to the clone, it will still pull
+them from the repository corresponding to ‹pkg-name›’s old source, and not from
+the git remote ‹url›. Usually, that’s what package developers want; when they’re
+not actively modifying a package, other developers’ updates should be pulled from
+the package’s main repository. In case where ‹url› is the preferred source of
+updates for raco pkg update, use ‹url› in
+
+  raco pkg update --clone ‹dir› ‹url›
+
+Beware, however, that raco pkg update may be less able to detect repository
+sharing among multiple packages (and keep the package installations consistently
+associated with a particular clone) when an alternative ‹url› is provided.
+#+end_quote
+
+*** References
+
+Really the [[https://docs.racket-lang.org/pkg/git-workflow.html#%2528part._clone-link%2529][process is well documented]]. 
+
+Also there's a newer [[https://blog.racket-lang.org/2017/09/tutorial-contributing-to-racket.html][Tutorial: Contributing to Racket]].
+
+[[https://alex-hhh.github.io/2018/01/changing-built-in-racket-packages.html][Changing built-in Racket packages]] blogpost, but it has redundant steps so feels
+like its cargo-culting there.
+
+** Error location reporting in (module+ test ...)
+
+is utterly useless. Errors themselves are ok, but location reported is the
+beginning of the module i.e. line:1:1 or some such. Why? Is this /racket-mode/
+only?
+
+Problem appears to be that we need to wrap tests in exception handlers that would
+catch and report both check or test-case that raised as well as location of
+exception itself. In /rackunit/ vocabulary what we want is that every check or
+test case is implicitly wrapped in ~check-not-exn~ IMO. But that would require
+/rackunit/ combinators of some kind. Does it offer any?
+
+Perhaps a combination of: ~define-check~ that requires explicit ~fail-check~
+inocation in the body to report a failure and the body wrapped in ~check-not-exn~
+or just exception handlers that call ~fail-check~.
+
+*** DONE Ask the mailing list
+CLOSED: [2019-05-18 Sat 13:07]
+
+[[https://groups.google.com/forum/#!topic/racket-users/aCQwqCTY42U][thread]]
+
+*** DONE reproduce in DrRacket
+CLOSED: [2019-04-03 Wed 12:12]
+
+** structs and generics have significant constraints but is that by design?
+
+In my limited experience with both structs and generics neither quite match
+expectation coming from records, generic methods or protocols in e.g. Elisp, CL or
+Clojure. Structs limit inheritance to single and it pretty much just amounts to
+inheriting a bunch of fields and adding some extra predicates that let you test if
+a subtype happens to be a parent type. Generics aren't really what you expect
+since (a) there's no way to "fall through" the inheritance chain by not providing
+an implementation, and (b) no way to explicitly invoke some specific
+implementation. ~#:fallbacks~ isn't of much help since it covers all unimplemented
+cases so you can't just pick and choose. You'd think you could do something like
+this:
+
+#+begin_src racket
+  (require racket/struct
+           racket/generic)
+
+  (define-generics foobar
+    (run foobar)
+    #:defaults
+    ((bar?
+       (define (run self) (foo-a self)))))
+
+  (struct foo (a)
+    #:methods gen:foobar
+    ((define (run s) (foo-a s))))
+
+  (struct bar foo (b)
+    #:methods gen:foobar
+    ())
+
+  (run (foo 0))
+  ;; => 0
+  (run (bar 1 2))
+  ;; => bar?: undefined;
+  ;;  cannot reference an identifier before its definition
+
+#+end_src
+
+but nope, all definitions are very much lexical, ~bar?~ hasn't been defined yet.
+Indeed generics are highly "lexical" or perhaps "static" is the word: attached to
+a particular struct definition lexically. So you must define them where you define
+the struct itself and you must employ the ~(define/generic super-method method)~
+trick if you want to "dispatch" rather than refer to a type specific
+implementation being defined.
+
+None of this is to say that either Racket structs or generics are somehow wrong. I
+conjecture that was a deliberate design decision whereupon you give up something
+in favor of something else: structs aren't inteded as generic containers you use
+to model a bunch of data in your domain - they aren't glorified hash-tables with
+identity, rather you only ever use them to extend Racket with truly new data
+types - values that need or could be first class on their own - then necessarily
+you priorities information hiding, tainting, declarations with props, etc - all
+the things Racket structs have that probably no other language offers; generics
+are there very much to support this intentional use of structs, not to give you
+flexibility of multiple dispatch with delegation, :before and :after methods etc.
+In fact, conjecture continues, about the only use case that suits their feature
+set (with all the constraints) is to group low-level functions that your type must
+implement for some higher-level API to work with your data. Period. In that world,
+yes, those functions may as well, or even better be, lexically attached to
+respective struct types, yada yada.
+
+If this observation is true, then I feel like maybe its worth making that explicit
+somewhere in the Guide if only for the sake of those beginners in the language who
+might not be so inexperienced with programming in general and may already have a
+bunch of other languages in their toolbox. It's been quite frustrating even if
+illuminating to discover all of the above and internalize things Racket doesn't
+really want you to do while trying to solve a real programming task rather than
+create a toy interpreter that your typical beginner might attempt. Nothing teaches
+you better than attempting to fit a square peg into a round hole. Except it takes
+time, effort and costs you a bunch of grey hair. No complaints, really - you gotta
+learn the language not some abstract concoction you've been running in your head.
+
+A followup observation or perhaps a natural conclusion is that Racket could use
+some light data structure programmers could turn to when hash-tables are too
+ad-hoc, while structs are too rigid. I guess I should build one.
