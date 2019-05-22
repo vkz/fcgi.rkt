@@ -1,0 +1,15 @@
+# local
+/play.rkt
+/scratch.rkt
+
+# Racket compiled files
+compiled/
+doc/
+
+# common backups, autosaves, lock files, OS meta-files
+*~
+\#*
+.#*
+.DS_Store
+*.bak
+TAGS

@@ -1,45 +1,18 @@
-MY PROJECTS  -*- mode: org; fill-column: 87 -*-
-#+CATEGORY: fcgi
+FCGI  -*- mode: org; fill-column: 82 -*-
+#+CATEGORY: fcgi.rkt
 #+STARTUP: content
-#+seq_todo: TODO STARTED(s@/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@)
+#+seq_todo: TODO STARTED(s@/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@) IDEA(i/@)
 #+TAGS: { SCHOOL(s) BLOG(b) }
 #+PROPERTY: Effort_ALL 0 0:10 0:30 1:00 2:00 3:00 4:00 5:00 6:00 7:00
 #+COLUMNS: %40ITEM(Task) %17Effort(Estimated Effort){:} %CLOCKSUM
 
-* Talk
-:PROPERTIES:
-:CATEGORY: RacketCon
-:END:
+* TODO Sketch fcgi with tables and MTP
 
-** Title
+Suppose for a moment that I have MTP implemented. Prototype fcgi to get the taste
+for how it may look with tables. That should also inform my MTP and tables
+implementation.
 
-#lang wishful thinking
-(will! it be so)
-
-** Bio
-
-Vlad Kozin
-
-Dilettante programmer from London who taught himself programming through HtDP and
-PLAI, did some paid Javascript, which he does not recommend, then paid Clojure,
-which he does. He has now gone back to the roots. Former @yandex and
-@droitfintech. Fall'13 @recursecenter aka @hackerschool alum.
-
-** Ideas
-
-*** #lang bio
-
-short biography on the screen
-
-*** Quote from Zigurat paper by Shivers
-
-*** Quote from SICP video
-
-do slide transition
-- /wishful thinking/ to
-- /#lang wishful thinking/
-
-* FastCGI
+* FastCGI protocol
 
 Turns out that your typical webserver with fastcgi doesn't usually implement
 multiplexing that the fastcgi standard mentions. That is no well known web server
@@ -80,6 +53,8 @@ may need to configure Nginx as "load-balancer" or some such.
 
 I'll have to google some more if Nginx doesn't multiplex connections as I expect.
 Solve by employing another trick like proxying or something.
+
+* HTTPD
 
 * Nginx
 
@@ -149,7 +124,7 @@ limited to very specific set of tasks.
   (define-generics foobar
 
     (run foobar)
-  
+
     ;; NOTE this works but this effectively defaults any missing method with no
     ;; regard to the type of struct
     #:fallbacks
@@ -277,9 +252,9 @@ cd rackunit
 ~/Code/rackunit $ raco pkg show --all --long --rx "rackunit*"
 
 Installation-wide:
- 
+
   ... omitted but rackunit pkgs are still there ...
- 
+
 User-specific for installation "development":
  Package                Checksum    Source
  rackunit               #f          (link "/Users/russki/Code/rackunit/rackunit")
@@ -301,7 +276,7 @@ And presto code changes are now picked up and jump to definition finally works.
 
 #+begin_src sh
 ~/Code/rackunit $ raco pkg install -j 8 --force \
- --catalog https://pkgs.racket-lang.org -i --clone . rackunit 
+ --catalog https://pkgs.racket-lang.org -i --clone . rackunit
 
 # to check the result: note the path: of every relevant package
 ~/Code/rackunit $ raco link -l rackunit*
@@ -337,7 +312,7 @@ associated with a particular clone) when an alternative ‹url› is provided.
 
 *** References
 
-Really the [[https://docs.racket-lang.org/pkg/git-workflow.html#%2528part._clone-link%2529][process is well documented]]. 
+Really the [[https://docs.racket-lang.org/pkg/git-workflow.html#%2528part._clone-link%2529][process is well documented]].
 
 Also there's a newer [[https://blog.racket-lang.org/2017/09/tutorial-contributing-to-racket.html][Tutorial: Contributing to Racket]].
 

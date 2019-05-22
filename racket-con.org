@@ -1,9 +1,31 @@
-* Talk title
+
+* Talk
+:PROPERTIES:
+:CATEGORY: RacketCon
+:END:
+
+** Talk title
 
 #+begin_src racket
 #lang wishful thinking
 (will! (it . be . so))
 #+end_src
+
+** Ideas
+
+*** #lang bio
+
+short biography on the screen
+
+*** Quote from Zigurat paper by Shivers
+
+*** Quote from SICP video
+
+do slide transition
+- /wishful thinking/ to
+- /#lang wishful thinking/
+
+
 
 * Talk abstract
 
