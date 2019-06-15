@@ -1,16 +1,65 @@
 FCGI  -*- mode: org; fill-column: 82 -*-
 #+CATEGORY: fcgi.rkt
 #+STARTUP: content
-#+seq_todo: TODO STARTED(s@/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@) IDEA(i/@)
-#+TAGS: { SCHOOL(s) BLOG(b) }
+#+seq_todo: TODO STARTED(s/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@) IDEA(i/@) PROMPT
+#+TAGS: { SCHOOL(s) BLOG(b) TIL(t) }
 #+PROPERTY: Effort_ALL 0 0:10 0:30 1:00 2:00 3:00 4:00 5:00 6:00 7:00
-#+COLUMNS: %40ITEM(Task) %17Effort(Estimated Effort){:} %CLOCKSUM
+#+COLUMNS: %30ITEM(Task) %CLOCKSUM %15Effort(Effort){:}
 
-* TODO Sketch fcgi with tables and MTP
+* fcgi.rkt
+
+** TODO Listen and receive FCGI connections
+
+** TODO Log as many FCGI records as possible with minimal parsing
+
+maybe ok to raise if unrecognized
+
+** TODO Parse <begin-request>
+
+** TODO Sketch fcgi with tables
 
 Suppose for a moment that I have MTP implemented. Prototype fcgi to get the taste
 for how it may look with tables. That should also inform my MTP and tables
 implementation.
+
+** IDEA #lang fcgi
+CLOSED: [2019-06-11 Tue 16:07]
+
+Yet to figure out exactly what that means, though. PHP style? Racket SCGI style?
+Something better?
+
+** IDEA RacketCon presentation as fcgi.rkt app
+CLOSED: [2019-06-11 Tue 13:39]
+
+Now that would be cool. Deliver the entire presentation then finish by saying that
+the whole thing has been an fcgi.rkt script!
+
+** IDEA FCGI with basic Racket
+CLOSED: [2019-06-11 Tue 13:38]
+
+** IDEA FCGI with Racket classes
+CLOSED: [2019-06-11 Tue 13:38]
+
+** IDEA FCGI in Typed Racket
+CLOSED: [2019-06-11 Tue 13:38]
+
+** IDEA bitsyntax match on port
+CLOSED: [2019-06-11 Tue 13:36]
+
+** IDEA bitsyntax match -> Racket match
+CLOSED: [2019-06-11 Tue 13:35]
+
+** IDEA Measure absolute perf with apache-bench
+CLOSED: [2019-06-11 Tue 13:34]
+
+** IDEA Compare perf with kcgi
+CLOSED: [2019-06-11 Tue 13:34]
+
+** IDEA Visualize FCGI in a simple Racket UI
+CLOSED: [2019-06-11 Tue 13:33]
+
+** IDEA Visualize FCGI by generating PlantUML diagrams
+CLOSED: [2019-06-11 Tue 13:32]
 
 * FastCGI protocol
 
