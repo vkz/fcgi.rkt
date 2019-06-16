@@ -115,11 +115,11 @@
   (check equal? #"\4\3name255"           (pack-name-value "name" 255))
   (check equal? #"\4\3name256"           (pack-name-value "name" 256))
   (check equal? #"\4\5name256.5"         (pack-name-value "name" 256.5))
-  (check equal? #"\3\3bazduh\3\3foobar"  (pack-name-values (ht ("foo" "bar")
-                                                               ("baz" "duh")))))
+  (check equal? #"\3\3bazduh\3\3foobar"  (pack-name-values {("foo" "bar")
+                                                            ("baz" "duh")})))
 
 
-(define (parse-name-values stream #:into [table (ht)])
+(define (parse-name-values stream #:into [table {}])
   (if (empty-bytes? stream)
       table
       (bit-string-case stream
@@ -128,18 +128,18 @@
           (name  :: binary bytes nlen)
           (value :: binary bytes vlen)
           (rest  :: binary)]
-         (set: table
-               (bytes->string/utf-8 (bit-string->bytes name))
-               (bytes->string/utf-8 (bit-string->bytes value)))
+         (set table
+              (bytes->string/utf-8 (bit-string->bytes name))
+              (bytes->string/utf-8 (bit-string->bytes value)))
          (parse-name-values rest #:into table)))))
 
 
 (module+ test
-  (check equal? (ht ("name" "value")) (parse-name-values (pack-name-value "name" "value")))
-  (check equal? (ht ("name" ""))      (parse-name-values (pack-name-value "name" "")))
-  (check equal? (ht ("name" "255"))   (parse-name-values (pack-name-value "name" "255")))
-  (check equal? (ht ("name" "256.5")) (parse-name-values (pack-name-value "name" 256.5)))
-  (check equal? (ht ("foo" "bar") ("baz" "duh")) (parse-name-values
+  (check-equal? {("name" "value")} (parse-name-values (pack-name-value "name" "value")))
+  (check-equal? {("name" "")}      (parse-name-values (pack-name-value "name" "")))
+  (check-equal? {("name" "255")}   (parse-name-values (pack-name-value "name" "255")))
+  (check-equal? {("name" "256.5")} (parse-name-values (pack-name-value "name" 256.5)))
+  (check-equal? {("foo" "bar") ("baz" "duh")} (parse-name-values
                                                   (bytes-append
                                                    (pack-name-value "foo" "bar")
                                                    (pack-name-value "baz" "duh")))))
@@ -228,13 +228,34 @@
   (check eq? 128 (bit-string-case #"\200\0\0\200" ([(len :: (fcgi-length))] len))))
 
 
+;;* Requests ----------------------------------------------------- *;;
+
+
+;; keyed by (list id <connection>)
+(define REQUESTS {})
+
+
+(define <connection> {#:check {<open> (:in (? input-port?))
+                                      (:out (? output-port?))}})
+
+
+(define <request> {#:check {<open> (:id (? integer?))
+                                   (:records (? list?))
+                                   (:params (? table?))}})
+
+
+(define/table (<request>:push record)
+  (set self :records (cons record (or? self.records '()))))
+
+
 ;;* FCGI records ------------------------------------------------- *;;
 
 
 (define (mt-of type)
   (cond
     ((eq? type FCGI_BEGIN_REQUEST) <begin-request>)
-    (else <mock>)
+    ((eq? type FCGI_PARAMS)        <params>)
+    (else                          <mock>)
     ;; (else (raise-argument-error 'mt-of "known record type" type))
     ))
 
@@ -260,7 +281,8 @@
                                   (:type    (? integer?))
                                   (:id      (? integer?))
                                   (:clen    (? integer?))
-                                  (:plen    (? integer?))}})
+                                  (:plen    (? integer?))
+                                  (:connection (? (curryr isa? <connection>)))}})
 
 
 (define/table (<record>:parse in)
@@ -269,6 +291,36 @@
      (set-table-meta! r (mt-of r.type))
      (r:parse in))
     (else (error "Failed to parse fcgi-header"))))
+
+
+(define/table (<record>:request)
+  (get REQUESTS (list self.id self.connection)))
+
+
+(define/table (<record>:deliver)
+  (define request (self:request))
+  (request:push self))
+
+
+(define <stream> {<record> #:check {<open> (:stream (? bytes?))}})
+
+
+(define/table (<stream>:parse in)
+  (define clen self.clen)
+  (define plen self.plen)
+  (bit-string-case (read-bytes (+ clen plen) in)
+    ([(stream :: binary bytes clen) (_ :: bytes plen)]
+     (set self :stream (bit-string->bytes stream)))
+    (else
+     (error "Failed to parse" (isa self)))))
+
+
+(define/table (<stream>:assemble)
+  (define request (self:request))
+  (bytes-append*
+   (for/list ((r (in-list request.records))
+              #:when (eq? r.type self.type))
+     r.stream)))
 
 
 ;;** - <begin-request> ------------------------------------------- *;;
@@ -296,6 +348,13 @@
     (self.role :: bytes 2)
     self.flags
     (0 :: bytes 5))))
+
+
+(define/table (<begin-request>:request)
+  ;; TODO check for duplicate request ids
+  (define request {<request> (:id self.id)})
+  (set REQUESTS (list self.id self.connection) request)
+  request)
 
 
 (module+ test
@@ -327,8 +386,22 @@
 ;;** - get-values ------------------------------------------------ *;;
 ;;** - get-values-result ----------------------------------------- *;;
 ;;** - unknown --------------------------------------------------- *;;
-;;** - stream ---------------------------------------------------- *;;
-;;** - params ---------------------------------------------------- *;;
+;;** - <params> -------------------------------------------------- *;;
+
+
+(define <params> {<stream>})
+
+
+(define/table (<params>:deliver)
+  (define request (self:request))
+  (if (zero? self.clen)
+      (set request :params (parse-name-values (self:assemble)))
+      (request:push self)
+      ;; TODO I would want to call (self:deliver) here but with current ::
+      ;; semantics we end up calling the same method, hm.
+      ))
+
+
 ;;** - stdin ----------------------------------------------------- *;;
 ;;** - stdout ---------------------------------------------------- *;;
 ;;** - stderr ---------------------------------------------------- *;;
@@ -351,13 +424,15 @@
   (define tcp-hostname "127.0.0.1")
   (define connection (tcp-listen tcp-port tcp-max-allow-wait tcp-reuse? tcp-hostname))
 
-  ;; (define connections empty)
-
   (let-values (((in out) (tcp-accept connection)))
+    (define connection {<connection> (:in in) (:out out)})
     (displayln "connection established")
-    (let loop ((r {<record>}))
-      (displayln (r:parse in))
-      (loop {<record>}))))
+    (let loop ((r {<record> (:connection connection)}))
+      ;; with <connection> we don't need to pass in port
+      (r:parse in)
+      (displayln r)
+      (r:deliver)
+      (loop {<record> (:connection connection)}))))
 
 
 ;;* Notes ----------------------------------------------------------- *;;
