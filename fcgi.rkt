@@ -16,6 +16,8 @@
 ;;* Constants ------------------------------------------------------- *;;
 
 
+(define FCGI_VERSION_1 1)
+
 ;; management records request ID is always 0
 (define FCGI_NULL_REQUEST_ID     0)
 
@@ -231,21 +233,98 @@
 ;;* Requests ----------------------------------------------------- *;;
 
 
-;; keyed by (list id <connection>)
-(define REQUESTS {})
-
-
 (define <connection> {#:check {<open> (:in (? input-port?))
-                                      (:out (? output-port?))}})
+                                      (:out (? output-port?))
+                                      (:requests (? table?))}})
 
 
-(define <request> {#:check {<open> (:id (? integer?))
-                                   (:records (? list?))
-                                   (:params (? table?))}})
+(define/table (<connection>:push request)
+  ;; TODO check for duplicate request ids?
+  (set (or? self.requests (begin (set self :requests {<requests>}) self.requests))
+       request.id
+       request)
+  ;; notify connection.writer thread of the new request
+  (thread-send self.writer request)
+  request)
+
+
+(define/table (<connection>:start-writer)
+  (set self :writer
+       (thread
+        (thunk
+         (let loop ()
+           (sync
+
+            (handle-evt (thread-receive-evt)
+                        (λ (_)
+                          (define mail (thread-receive))
+                          (cond
+                            ;; new request => (loop)
+                            ((and (table? mail) (isa? mail <request>)))
+                            (else (raise-argument-error 'connection.writer
+                                                        "<request>" mail)))))
+
+            (handle-evt self.requests
+                        (λ (request port)
+                          (define bytes (read-bytes 65535 port))
+                          (define stream (if (eof-object? bytes) #"" bytes))
+                          (define <record> (cond ((eq? port request.stdout) <stdout>)
+                                                 ((eq? port request.stderr) <stderr>)))
+                          (define record {<record> (:id request.id)
+                                                   (:stream stream)})
+                          (record:deliver))))
+
+           (unless (port-closed? self.out)
+             (loop)))))))
+
+
+(define current-connection (make-parameter undefined))
+
+
+(struct port (source sink)
+  #:property prop:input-port 0
+  #:property prop:output-port 1)
+(define (make-port (limit #f))
+  (let-values (((source sink) (make-pipe)))
+    (let ((source (if limit (make-limited-input-port source limit) source)))
+      (port source sink))))
+
+
+(define <request> {<table/evt> #:check {<open> (:id      (? integer?))
+                                               (:records (? list?))
+                                               (:params  (? table?))
+                                               (:stdin   (? port?))
+                                               (:stdout  (? port?))
+                                               (:stderr  (? port?))
+                                               (:data    (? port?))
+                                               (:app     (? procedure?))}})
+
+
+(define/table (<request>:evt)
+  (wrap-evt (choice-evt self.stdout self.stderr)
+            (λ (port) (values self port))))
+
+
+(define/table (<request>:<proc>)
+  (thread
+   (thunk
+    (parameterize
+        ((current-input-port self.stdin)
+         (current-output-port self.stdout)
+         (current-error-port self.stderr))
+      (self:app)
+      ;; TODO we only ever get here when the request's ended. Maybe check if the
+      ;; user hasn't sent the end-request and send the default one here. This
+      ;; would cover most typical case and spare the user from doing it.
+      ))))
 
 
 (define/table (<request>:push record)
   (set self :records (cons record (or? self.records '()))))
+
+
+;; {(request-id <request>)}
+(define <requests> {<table/evt> (:evt (λ (t) (apply choice-evt (dict-values t))))})
 
 
 ;;* FCGI records ------------------------------------------------- *;;
@@ -255,6 +334,9 @@
   (cond
     ((eq? type FCGI_BEGIN_REQUEST) <begin-request>)
     ((eq? type FCGI_PARAMS)        <params>)
+    ((eq? type FCGI_STDIN)         <stdin>)
+    ((eq? type FCGI_STDOUT)        <stdout>)
+    ((eq? type FCGI_STDERR)        <stderr>)
     (else                          <mock>)
     ;; (else (raise-argument-error 'mt-of "known record type" type))
     ))
@@ -276,13 +358,15 @@
     ((eq? record-num FCGI_MAXTYPE)           :MAXTYPE)))
 
 
+;;* <record> ----------------------------------------------------- *;;
+
 
 (define <record> {#:check {<open> (:version (? integer?))
                                   (:type    (? integer?))
                                   (:id      (? integer?))
                                   (:clen    (? integer?))
-                                  (:plen    (? integer?))
-                                  (:connection (? (curryr isa? <connection>)))}})
+                                  (:plen    (? integer?))}
+                  (:version FCGI_VERSION_1)})
 
 
 (define/table (<record>:parse in)
@@ -294,12 +378,17 @@
 
 
 (define/table (<record>:request)
-  (get REQUESTS (list self.id self.connection)))
+  (define connection (current-connection))
+  (define requests (get connection :requests))
+  (get requests self.id))
 
 
 (define/table (<record>:deliver)
   (define request (self:request))
   (request:push self))
+
+
+;;* <stream> ----------------------------------------------------- *;;
 
 
 (define <stream> {<record> #:check {<open> (:stream (? bytes?))}})
@@ -323,11 +412,23 @@
      r.stream)))
 
 
+(define/table (<stream>:pack)
+  (define stream (or? self.stream #""))
+  (define-values (plen padding body) (pad self))
+  (set self :clen (bytes-length stream))
+  (set self :plen plen)
+  (bit-string->bytes
+   (bit-string
+    (self :: (fcgi-header))
+    (body :: binary))))
+
+
 ;;** - <begin-request> ------------------------------------------- *;;
 
 
 (define <begin-request> {<record> #:check {<open> (:role (? integer?))
-                                                  (:flags (? integer?))}})
+                                                  (:flags (? integer?))}
+                                  (:type FCGI_BEGIN_REQUEST)})
 
 
 (define/table (<begin-request>:parse in)
@@ -350,11 +451,22 @@
     (0 :: bytes 5))))
 
 
+;; TODO (define (end-request))
+
+
+(define (app request)
+  (display "Content-type: text/plain\r\n\r\n")
+  ;; TODO HTML table with params
+  (display "Hello world!")
+  (newline)
+  ;; TODO (end-request)
+  )
+
+
 (define/table (<begin-request>:request)
-  ;; TODO check for duplicate request ids
-  (define request {<request> (:id self.id)})
-  (set REQUESTS (list self.id self.connection) request)
-  request)
+  (define connection (current-connection))
+  (connection:push {<request> (:id self.id)
+                              (:app app)}))
 
 
 (module+ test
@@ -389,32 +501,85 @@
 ;;** - <params> -------------------------------------------------- *;;
 
 
-(define <params> {<stream>})
+(define <params> {<stream> (:type FCGI_PARAMS)})
+
+
+(define (content-length params)
+  (or (string->number (get params "CONTENT_LENGTH")) 0))
 
 
 (define/table (<params>:deliver)
   (define request (self:request))
-  (if (zero? self.clen)
-      (set request :params (parse-name-values (self:assemble)))
+  (cond
+    ((zero? self.clen)
+     (set request :params (parse-name-values (self:assemble)))
+     (set request :stdin (make-port (content-length request.params)))
+     (set request :stdout (make-port))
+     (set request :stderr (make-port))
+     ;; run the app
+     (request))
+    (else (request:push self))
+    ;; TODO I would want to call (self:deliver) here but with current ::
+    ;; semantics we end up calling the same method, hm.
+    ))
+
+
+;;** - <stdin> --------------------------------------------------- *;;
+
+
+(define <stdin> {<stream> (:type FCGI_STDIN)})
+
+
+;; TODO don't forget that we must receive at most CONTENT_LENGTH bytes in stdin.
+;; In fact we may as well limit the input port to CONTENT_LENGTH with
+;; make-limited-input-port
+
+;; very general solution that potentially doesn't wait for <stdin> to finish
+#;(define/table (<stdin>:deliver)
+    (define request (self:request))
+    (unless (zero? self.clen)
       (request:push self)
-      ;; TODO I would want to call (self:deliver) here but with current ::
-      ;; semantics we end up calling the same method, hm.
-      ))
+      ;; TODO make it non-blocking, but keep in mind that we maybe introducing a
+      ;; race with later <stdin> chunks, so either guard with semaphore or have a
+      ;; special <stdin> writer thread and send streams to its mailbox for writing
+      (write-bytes self.stream request.stdin)))
 
 
-;;** - stdin ----------------------------------------------------- *;;
-;;** - stdout ---------------------------------------------------- *;;
-;;** - stderr ---------------------------------------------------- *;;
+;; solution that waits for all chunks to arrive, then assembles them
+(define/table (<stdin>:deliver)
+  (define request (self:request))
+  (cond
+    ((zero? self.clen)
+     ;; TODO make it non-blocking
+     (write-bytes (self:assemble) request.stdin))
+    (else (request:push self))))
+
+
+;;** - <stdout> -------------------------------------------------- *;;
+
+
+(define <stdout> {<stream> (:type FCGI_STDOUT)})
+
+
+(define/table (<stdout>:deliver)
+  (define connection (current-connection))
+  (write-bytes (self:pack) connection.out))
+
+
+;;** - <stderr> -------------------------------------------------- *;;
+
+
+(define <stderr> {<stream> (:type FCGI_STDERR)})
+
+
+(define/table (<stderr>:deliver)
+  (define connection (current-connection))
+  (write-bytes (self:pack) connection.out))
+
+
 ;;** - data ------------------------------------------------------ *;;
 
-;;* Connection ------------------------------------------------------ *;;
-
-
-;; Standard ports for request struct
-(struct stdin  (source sink) #:property prop:input-port 0 #:property prop:output-port 1)
-(struct stdout (source sink) #:property prop:input-port 0 #:property prop:output-port 1)
-(struct stderr (source sink) #:property prop:input-port 0 #:property prop:output-port 1)
-(struct data   (source sink) #:property prop:input-port 0 #:property prop:output-port 1)
+;;* Main --------------------------------------------------------- *;;
 
 
 (define (main)
@@ -425,14 +590,16 @@
   (define connection (tcp-listen tcp-port tcp-max-allow-wait tcp-reuse? tcp-hostname))
 
   (let-values (((in out) (tcp-accept connection)))
-    (define connection {<connection> (:in in) (:out out)})
+    (define connection {<connection> (:in in) (:out out) (:requests {<requests>})})
     (displayln "connection established")
-    (let loop ((r {<record> (:connection connection)}))
-      ;; with <connection> we don't need to pass in port
-      (r:parse in)
-      (displayln r)
-      (r:deliver)
-      (loop {<record> (:connection connection)}))))
+    (connection:start-writer)
+    (parameterize ((current-connection connection))
+      (let loop ((r {<record>}))
+        (r:parse in)
+        (displayln (isa r))
+        (r:deliver)
+        (unless (port-closed? in)
+          (loop {<record>}))))))
 
 
 ;;* Notes ----------------------------------------------------------- *;;
