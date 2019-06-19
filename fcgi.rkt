@@ -257,6 +257,7 @@
 
             (handle-evt (thread-receive-evt)
                         (λ (_)
+                          (displayln "writer: fresh request")
                           (define mail (thread-receive))
                           (cond
                             ;; new request => (loop)
@@ -265,11 +266,14 @@
                                                         "<request>" mail)))))
 
             (handle-evt self.requests
-                        (λ (request port)
-                          (define bytes (read-bytes 65535 port))
-                          (define stream (if (eof-object? bytes) #"" bytes))
-                          (define <record> (cond ((eq? port request.stdout) <stdout>)
-                                                 ((eq? port request.stderr) <stderr>)))
+                        (λ (request port <record>)
+                          (define buffer (make-bytes 65535))
+                          ;; TODO such approach may have an unfortunate
+                          ;; consequence where we loop grabbing too few bytes and
+                          ;; therefore send tiny <stdout> records.
+                          (define count (read-bytes-avail! buffer port))
+                          (define stream (if (eof-object? count) #""
+                                             (subbytes buffer 0 count)))
                           (define record {<record> (:id request.id)
                                                    (:stream stream)})
                           (record:deliver))))
@@ -297,26 +301,33 @@
                                                (:stdout  (? port?))
                                                (:stderr  (? port?))
                                                (:data    (? port?))
-                                               (:app     (? procedure?))}})
+                                               (:app     (? procedure?))
+                                               (:thread  (? thread?))}})
 
 
 (define/table (<request>:evt)
-  (wrap-evt (choice-evt self.stdout self.stderr)
-            (λ (port) (values self port))))
+  ;; values: request pipe record-metatable
+  (define out (wrap-evt self.stdout (λ (_) (values self self.stdout <stdout>))))
+  (define err (wrap-evt self.stderr (λ (_) (values self self.stderr <stderr>))))
+  (choice-evt out err))
 
 
 (define/table (<request>:<proc>)
-  (thread
-   (thunk
-    (parameterize
-        ((current-input-port self.stdin)
-         (current-output-port self.stdout)
-         (current-error-port self.stderr))
-      (self:app)
-      ;; TODO we only ever get here when the request's ended. Maybe check if the
-      ;; user hasn't sent the end-request and send the default one here. This
-      ;; would cover most typical case and spare the user from doing it.
-      ))))
+  (set self :thread
+       (thread
+        (thunk
+         (parameterize ((current-input-port self.stdin)
+                        (current-output-port self.stdout)
+                        (current-error-port self.stderr))
+           (define end-request {<end-request> (:id self.id)})
+           (self:app)
+           (close-output-port self.stdout)
+           ;; TODO hm, this would result in us sending a closing <stderr>, which
+           ;; may not be what we wanted. But maybe it'll be ignored?
+           (close-output-port self.stderr)
+           ;; TODO I think this could race vs closing <stdout> above
+           ;; (end-request:deliver)
+           )))))
 
 
 (define/table (<request>:push record)
@@ -337,6 +348,7 @@
     ((eq? type FCGI_STDIN)         <stdin>)
     ((eq? type FCGI_STDOUT)        <stdout>)
     ((eq? type FCGI_STDERR)        <stderr>)
+    ((eq? type FCGI_END_REQUEST)   <end-request>)
     (else                          <mock>)
     ;; (else (raise-argument-error 'mt-of "known record type" type))
     ))
@@ -414,7 +426,7 @@
 
 (define/table (<stream>:pack)
   (define stream (or? self.stream #""))
-  (define-values (plen padding body) (pad self))
+  (define-values (plen padding body) (pad stream))
   (set self :clen (bytes-length stream))
   (set self :plen plen)
   (bit-string->bytes
@@ -451,18 +463,6 @@
     (0 :: bytes 5))))
 
 
-;; TODO (define (end-request))
-
-
-(define (app request)
-  (display "Content-type: text/plain\r\n\r\n")
-  ;; TODO HTML table with params
-  (display "Hello world!")
-  (newline)
-  ;; TODO (end-request)
-  )
-
-
 (define/table (<begin-request>:request)
   (define connection (current-connection))
   (connection:push {<request> (:id self.id)
@@ -494,7 +494,6 @@
 
 
 ;;** - abort-request --------------------------------------------- *;;
-;;** - end-request ----------------------------------------------- *;;
 ;;** - get-values ------------------------------------------------ *;;
 ;;** - get-values-result ----------------------------------------- *;;
 ;;** - unknown --------------------------------------------------- *;;
@@ -550,7 +549,6 @@
   (define request (self:request))
   (cond
     ((zero? self.clen)
-     ;; TODO make it non-blocking
      (write-bytes (self:assemble) request.stdin))
     (else (request:push self))))
 
@@ -558,12 +556,20 @@
 ;;** - <stdout> -------------------------------------------------- *;;
 
 
+;; TODO consider <outgoing-record> as parent for <stdout>, <stderr> and
+;; <end-request> since their methods do pretty much the same thing.
+
+
 (define <stdout> {<stream> (:type FCGI_STDOUT)})
 
 
 (define/table (<stdout>:deliver)
   (define connection (current-connection))
-  (write-bytes (self:pack) connection.out))
+  (define message (self:pack))
+  (define count (write-bytes message connection.out))
+  (flush-output connection.out)
+  (printf "<stdout>: ~a bytes delivered\n" count)
+  (displayln message))
 
 
 ;;** - <stderr> -------------------------------------------------- *;;
@@ -579,7 +585,56 @@
 
 ;;** - data ------------------------------------------------------ *;;
 
+
+;;** - end-request ----------------------------------------------- *;;
+
+
+(define <end-request> {<record> (:type FCGI_END_REQUEST)
+                                (:clen 8)
+                                (:plen 0)
+                                (:app-status 0)
+                                (:proto-status FCGI_REQUEST_COMPLETE)})
+
+
+(define/table (<end-request>:pack)
+  (bit-string->bytes
+   (bit-string
+    (self :: (fcgi-header))
+    (self.app-status :: bytes 4)
+    self.proto-status
+    (0 :: bytes 3))))
+
+
+(define/table (<end-request>:deliver)
+  (define connection (current-connection))
+  (define message (self:pack))
+  (define count (write-bytes message connection.out))
+  (flush-output connection.out)
+  (printf "<end-request>: ~a bytes delivered\n" count))
+
+
+;;* app ---------------------------------------------------------- *;;
+
+
+(define (app request)
+  (display "Content-type: text/html\r\n\r\n")
+  ;; TODO HTML table with params
+  (display "<html><body>Hello world!</body></html>"))
+
+
 ;;* Main --------------------------------------------------------- *;;
+
+
+(define/table (<connection>:start-reader)
+  (set self :reader
+       (thread
+        (thunk
+         (let loop ((r {<record>}))
+           (r:parse self.in)
+           (displayln (isa r))
+           (r:deliver)
+           (unless (port-closed? self.in)
+             (loop {<record>})))))))
 
 
 (define (main)
@@ -587,19 +642,22 @@
   (define tcp-max-allow-wait 1024)
   (define tcp-reuse? false)
   (define tcp-hostname "127.0.0.1")
-  (define connection (tcp-listen tcp-port tcp-max-allow-wait tcp-reuse? tcp-hostname))
+  (define tcp-listener (tcp-listen tcp-port tcp-max-allow-wait tcp-reuse? tcp-hostname))
 
-  (let-values (((in out) (tcp-accept connection)))
-    (define connection {<connection> (:in in) (:out out) (:requests {<requests>})})
-    (displayln "connection established")
-    (connection:start-writer)
-    (parameterize ((current-connection connection))
-      (let loop ((r {<record>}))
-        (r:parse in)
-        (displayln (isa r))
-        (r:deliver)
-        (unless (port-closed? in)
-          (loop {<record>}))))))
+  (let loop ()
+    (define connection-custodian (make-custodian))
+    (define connection {<connection> (:requests {<requests>})
+                                     (:custodian connection-custodian)})
+    (parameterize ((current-custodian connection-custodian)
+                   (current-connection connection))
+
+      (let-values (((in out) (tcp-accept tcp-listener)))
+        (displayln "client connected")
+        (set connection :in in)
+        (set connection :out out)
+        (connection:start-writer)
+        (connection:start-reader)))
+    (loop)))
 
 
 ;;* Notes ----------------------------------------------------------- *;;
