@@ -1,32 +1,267 @@
 FCGI  -*- mode: org; fill-column: 82 -*-
 #+CATEGORY: fcgi.rkt
 #+STARTUP: content
-#+seq_todo: TODO STARTED(s/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@) IDEA(i/@) PROMPT
+#+seq_todo: TODO STARTED(s/@) WAITING(w@/@) DELEGATED(l@/@) APPT | DONE(d@/@) DEFERRED(f@/@) CANCELLED(x@/@) IDEA(i/@)
 #+TAGS: { SCHOOL(s) BLOG(b) TIL(t) }
 #+PROPERTY: Effort_ALL 0 0:10 0:30 1:00 2:00 3:00 4:00 5:00 6:00 7:00
 #+COLUMNS: %30ITEM(Task) %CLOCKSUM %15Effort(Effort){:}
 
 * fcgi.rkt
 
-** TODO Listen and receive FCGI connections
+** TODO Gracefully handle TCP connection closure
 
-** TODO Log as many FCGI records as possible with minimal parsing
+Some check needed somewhere before we attempt to do IO on the TCP connection.
+Appears Nginx immediately closes it having received FCGI repsonse.
 
+** TODO Ensure resources are managed correctly
+
+TCP connections, threads, requests and records. I must ensure we don't leak
+resources somehow and that those are released and collected in timely fashion.
+
+** TODO Management records
+** TODO Implement parse, pack and deliver for every record
+
+not required to implement the protocol, but it would make it possible to write
+standalone tests that don't require external webserver.
+
+** TODO Add proper logging
+
+Log every record received.
+Log every record sent.
+Log every request started or complete.
+Log every thread started or complete.
+
+If we do it right and manage to get reasonable timestamps, we could then use this
+log to visualize protocol flow.
+
+** TODO <abort-request>
+** TODO #lang fcgi - what is fcgi app?
+
+- State "TODO"       from "IDEA"       [2019-06-20 Thu 12:13]
+Beginning to understand here. Our fcgi implementation should be nothing but the
+"kit" for building fcgi apps. That is it provides basic handling of FCGI records,
+but IMO apps should be able to provide their own implementations. It is
+interesting how this can be solved both with Racket fascilities i.e. some form of
+dynamic scoping or maybe via macros that use bindings at call site? Better yet
+solve this with tables somehow: say with app inheriting from default record
+metatables and substituting some methods; or perhaps even better with some form of
+<generic> dispatch?
+
+At minimum fcgi app must:
+- read from stdin that sucks <stdin> stream,
+- write to stdout and stderr that are chunked and sent as <stdout> <stderr>
+  streams,
+- access request meta through params,
+- control whats sent as <end-request>,
+- receive and handle <abort-request>,
+- access app meta (resources) and potentially handle <begin-request> specially.
+
+In that light here are some interesting "apps" that we may want to implement and
+ship to the user:
+- cgi.rkt - acts essentially like CGI and would invoke a script named in params,
+- inmem-cgi.rkt - like CGI but simply call handlers that are already loaded,
+- FCGI passthrough - proxy that we control completely to be used to implement and
+  test other FCGI implementations even in other languages (since we can't really
+  control the web-server).
+
+App needs to be able to define what kind of multiplexing it allows:
+- new connection for every request - only one connection at a time,
+- new connection for every request - parallel connections,
+- many requests per connection - full multiplexing.
+
+#+begin_src racket
+  #lang fcgi
+  #:max-connections N
+  ;; defaults to 1 (no connection multiplexing)
+  #:max-requests 10000
+  ;; defaults to max-connections; max-requests > max-connections implies full
+  ;; request multiplexing
+
+  ;; alternatively specify
+  #:multiplex #t
+  ;; equivalent to
+  ;; =>
+  #:max-connections default-max-connections
+  #:max-requests default-max-requests
+
+  ;; body here only controls how we handle a single request, we do not mess with
+  ;; default implementations of how records are handled
+
+  ;; standard ports are linked as expected
+
+  ;; interesting way would be to simply allow "sending" structured data i.e. HTML
+  ;; without explicitly writing to bytes and then to stdout. I believe that e.g.
+  ;; html-template does exactly that. Another way is to run this body exactly how we
+  ;; would run an app and simply send the value it returns over the wire first
+  ;; converting it to HTML as needed. Or something along those lines.
+#+end_src
+
+Alternative with fine grained control over the app:
+
+#+begin_src racket
+  #lang racket/tables
+
+  ;; that part will only run once
+  ;; ----------------------------
+
+  (require fcgi)
+
+  ;; set parameters
+  (max-connections 1000)
+  (max-requests 1000)
+
+  ;; potentially override some metatables e.g. <begin-request> to implement custom
+  ;; methods or define <generic> methods that override the defaults.
+
+  ;; A trivial way of doing it assuming fcgi provides <begin-request>:
+  ;;
+  ;; save method we override
+  (define default-begin-request-deliver <begin-request>.deliver)
+  ;; override the :deliver
+  (define (<begin-request>:deliver)
+    ;; our implementation here
+    )
+
+  ;; that part is our actual request handler and will run for every request
+  ;; ----------------------------------------------------------------------
+
+  (fcgi (some)
+        (stuff to do here)
+        ;; has access to
+        (params)
+        ;; and in fact the entire
+        (request)
+        ;; and maybe app meta data
+        (app)
+        ;; e.g.
+        (get (app) :requests)
+        ;; => all requests in flight
+        (get (app) :connections)
+        ;; => all concurrent connections
+
+        ;; standard ports are all linked as needed
+        (current-input-port)
+        (current-output-port)
+        (current-error-port))
+#+end_src
+
+** TODO <stderr>
+
+Somewhat fuzzy as to what this ought to actually be. Appears that it is like
+<stdout> to "respond" with some error page or something. I'd have to experiment
+and see if e.g. I send only <stderr> what the client gets.
+
+** TODO Chunking with read-bytes-avail!
+
+Our connection-writer thread reads stdout bytes with ~read-bytes-avail~ which
+pretty consistently just grabs the first 8 bytes. This leads to unreasonably fine
+chunked stream and potentially significant overhead: every such chunk gets its own
+record and has to be communicated over TCP socket.
+
+First, is there a better than bytes-avail strategy for reading bytes from ports?
+Should we simply accumulate the entire <stdout> then deliver it?
+
+** TODO Other roles: authorizer and filter
+
+Although I admit I haven't the foggiest why or when they would ever be used. Can I
+find some examples in the wild?
+
+** DONE Listen and receive FCGI connections
+CLOSED: [2019-06-15 Sat 17:07]
+- State "DONE"       from "TODO"       [2019-06-15 Sat 17:07]
+- State "TODO"       from "STARTED"    [2019-06-15 Sat 15:20] \\
+  Need to sort out tables.rkt first
+:LOGBOOK:
+CLOCK: [2019-06-15 Sat 14:42]--[2019-06-15 Sat 15:20] =>  0:38
+:END:
+
+** DONE Log as many FCGI records as possible with minimal parsing
+CLOSED: [2019-06-16 Sun 11:11]
+
+- State "DONE"       from "TODO"       [2019-06-16 Sun 11:11] \\
+  Was surprisingly easy: create a <mock> metatable, parse the header to obtain the
+  type, any type not yet implemented becomes a <mock> record, whose parse simply
+  reads the body and ignores it.
 maybe ok to raise if unrecognized
 
-** TODO Parse <begin-request>
+** DONE Parse <begin-request>
+CLOSED: [2019-06-15 Sat 17:07]
 
-** TODO Sketch fcgi with tables
+- State "DONE"       from "TODO"       [2019-06-15 Sat 17:07]
+** DONE Parse <params>
+CLOSED: [2019-06-16 Sun 14:07]
+- State "DONE"       from "TODO"       [2019-06-16 Sun 14:07]
+- State "TODO"       from "STARTED"    [2019-06-16 Sun 12:14]
+:LOGBOOK:
+CLOCK: [2019-06-16 Sun 11:32]--[2019-06-16 Sun 12:14] =>  0:42
+:END:
+** DONE Assemble <params>
+CLOSED: [2019-06-16 Sun 16:48]
+- State "DONE"       from "TODO"       [2019-06-16 Sun 16:48]
+** DONE <stdin>
+CLOSED: [2019-06-19 Wed 11:25]
 
+- State "DONE"       from "TODO"       [2019-06-19 Wed 11:25]
+I think ideally we'd want to simply pipe <stdin> streams as they come in into
+corresponding request's stdin port. Said stdin port can be limited to
+~CONTENT_LENGTH~ obtained from <params>.
+
+** DONE How and when to break the reader loop
+CLOSED: [2019-06-19 Wed 14:29]
+- State "DONE"       from "STARTED"    [2019-06-19 Wed 14:29]
+:LOGBOOK:
+CLOCK: [2019-06-19 Wed 11:41]--[2019-06-19 Wed 14:29] =>  2:48
+:END:
+
+Having received <stdin> there isn't much for the loop to do unless we'are
+multiplexing records on the same connection. Without multiplexing the loop needs
+to stop, with multiplexing it may continuen to parse and deliver records.
+
+Freaking multiplexing strikes again. Request per connection would be so much
+easier. Why do I even bother? Do webservers actually support full multiplexing?
+
+** DONE How does <request> respond via stdout and stderr?
+CLOSED: [2019-06-20 Thu 11:50]
+
+- State "DONE"       from "TODO"       [2019-06-20 Thu 11:50]
+Essentially comes down to figuring out how to allow for multiplexed connections
+and multiplexed requests on a single connection. Many requests per connection
+means there maybe a race where requests attempt to write to connection stdout
+simultaneously. This calls for intermediator that would queue and send repsonses
+sequentially disallowing bytes from different requests to be interleaved.
+
+Request is several things:
+- proc (whatever "script" came in in params),
+- stdin port that receives <stdin> chunks,
+- stdout port that gets chunked into <stdout> records and sent via connection out,
+- stderr ditto stdout (can ignore for now),
+- some kind of evt that signals that request has finished.
+
+** DONE <end-request>
+CLOSED: [2019-06-20 Thu 11:50]
+- State "DONE"       from "TODO"       [2019-06-20 Thu 11:50] \\
+  <end-request>:pack is actually fine. Best I can tell I had a race where
+  <end-request> would get sent before <stdout> stream's been closed so Nginx
+  state-machine would essentially receive records out of order. That kinda tells you
+  that FastCGI protocl itself sucks badly: it is underspecified and has all sorts of
+  possible races with no clear strategy to prevent them. So what implementations do?
+  They effectively come up with a state machine that imposes record ordering. Tough
+  luck if your FCGI client doesn't follow that order. FCGI is a bad protocol.
+- State "TODO"       from "STARTED"    [2019-06-19 Wed 17:23] \\
+  Looks like <end-request>:pack produces malformed record. Nginx reports unexpected
+  record type or something like that. Either that, or Nginx FastCGI doesn't expect
+  to receive <end-request> at all, so that type of message doesn't even exist from
+  its perspective?
+:LOGBOOK:
+CLOCK: [2019-06-19 Wed 15:58]--[2019-06-19 Wed 17:23] =>  1:25
+:END:
+** DONE Sketch fcgi with tables
+CLOSED: [2019-06-16 Sun 11:29]
+
+- State "DONE"       from "TODO"       [2019-06-16 Sun 11:29]
 Suppose for a moment that I have MTP implemented. Prototype fcgi to get the taste
 for how it may look with tables. That should also inform my MTP and tables
 implementation.
-
-** IDEA #lang fcgi
-CLOSED: [2019-06-11 Tue 16:07]
-
-Yet to figure out exactly what that means, though. PHP style? Racket SCGI style?
-Something better?
 
 ** IDEA RacketCon presentation as fcgi.rkt app
 CLOSED: [2019-06-11 Tue 13:39]
@@ -49,17 +284,22 @@ CLOSED: [2019-06-11 Tue 13:36]
 ** IDEA bitsyntax match -> Racket match
 CLOSED: [2019-06-11 Tue 13:35]
 
-** IDEA Measure absolute perf with apache-bench
-CLOSED: [2019-06-11 Tue 13:34]
+** TODO Measure absolute perf with apache-bench
 
+- State "TODO"       from "IDEA"       [2019-06-16 Sun 11:30]
+** IDEA Compare perf with Racket SCGI
+CLOSED: [2019-06-18 Tue 10:48]
 ** IDEA Compare perf with kcgi
 CLOSED: [2019-06-11 Tue 13:34]
 
 ** IDEA Visualize FCGI in a simple Racket UI
 CLOSED: [2019-06-11 Tue 13:33]
 
-** IDEA Visualize FCGI by generating PlantUML diagrams
-CLOSED: [2019-06-11 Tue 13:32]
+** TODO Visualize FCGI by generating PlantUML diagrams
+- State "STARTED"    from "IDEA"       [2019-06-15 Sat 14:39] \\
+  Going to try and receive at least one fcgi record from the webserver.
+:LOGBOOK:
+:END:
 
 * FastCGI protocol
 
@@ -123,6 +363,17 @@ FastCGI process must be started independently of Nginx which doesn't do that.
 I'll collect some annoyances about Racket the language and the programming
 experience it brings to the table. Hopefully I can fix most of them or at least
 wine about them and see if there's anyone who share in the chagrin.
+
+** TIL later function params can refer to previous ones
+
+works at least for #:kw args:
+
+#+begin_src racket
+  (define (f #:a (a 1) #:b (b a))
+    (list a b))
+  ;; (f) =>
+  '(1 1)
+#+end_src
 
 ** TIL embedding in Racket with unquote escapes
 
