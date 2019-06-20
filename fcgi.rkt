@@ -263,23 +263,45 @@
                             ;; new request => (loop)
                             ((and (table? mail) (isa? mail <request>)))
                             (else (raise-argument-error 'connection.writer
-                                                        "<request>" mail)))))
+                                                        "<request>" mail)))
+                          (unless (port-closed? self.out)
+                            (loop))))
 
             (handle-evt self.requests
                         (λ (request port <record>)
+                          ;; TODO I could move this to <outgoing-record>:pack and
+                          ;; <outgoing-record>:deliver
                           (define buffer (make-bytes 65535))
-                          ;; TODO such approach may have an unfortunate
-                          ;; consequence where we loop grabbing too few bytes and
-                          ;; therefore send tiny <stdout> records.
                           (define count (read-bytes-avail! buffer port))
                           (define stream (if (eof-object? count) #""
                                              (subbytes buffer 0 count)))
                           (define record {<record> (:id request.id)
                                                    (:stream stream)})
-                          (record:deliver))))
+                          (record:deliver)
+                          ;; TODO abstract this so we could simply do this:
+                          ;; (when (request:streams-closed?) (request:end))
+                          (cond
+                            ;; flag relevant stream as closed
+                            ((and (empty-bytes? stream) (isa? record <stdout>))
+                             (set request :stdout-closed #t))
+                            ((and (empty-bytes? stream) (isa? record <stderr>))
+                             (set request :stderr-closed #t)))
+                          ;; when both streams are closed consider request
+                          ;; handled: send end-request and free resources
+                          (when (and request.stdout-closed request.stderr-closed)
+                            (let ((end-request {<end-request> (:id request.id)}))
+                              (end-request:deliver)
+                              (set request :closed #t)
+                              ;; TODO (request:drop)
+                              ))
+                          (unless (port-closed? self.out)
+                            (loop))))
 
-           (unless (port-closed? self.out)
-             (loop)))))))
+            (handle-evt (port-closed-evt self.out)
+                        (λ (port)
+                          (displayln "connection.out closed"))))
+
+           (displayln "connection.writer closed"))))))
 
 
 (define current-connection (make-parameter undefined))
@@ -324,10 +346,7 @@
            (close-output-port self.stdout)
            ;; TODO hm, this would result in us sending a closing <stderr>, which
            ;; may not be what we wanted. But maybe it'll be ignored?
-           (close-output-port self.stderr)
-           ;; TODO I think this could race vs closing <stdout> above
-           ;; (end-request:deliver)
-           )))))
+           (close-output-port self.stderr))))))
 
 
 (define/table (<request>:push record)
@@ -529,9 +548,14 @@
 (define <stdin> {<stream> (:type FCGI_STDIN)})
 
 
-;; TODO don't forget that we must receive at most CONTENT_LENGTH bytes in stdin.
-;; In fact we may as well limit the input port to CONTENT_LENGTH with
-;; make-limited-input-port
+;; solution that waits for all chunks to arrive, then assembles them
+(define/table (<stdin>:deliver)
+  (define request (self:request))
+  (cond
+    ((zero? self.clen)
+     (write-bytes (self:assemble) request.stdin))
+    (else (request:push self))))
+
 
 ;; very general solution that potentially doesn't wait for <stdin> to finish
 #;(define/table (<stdin>:deliver)
@@ -542,15 +566,6 @@
       ;; race with later <stdin> chunks, so either guard with semaphore or have a
       ;; special <stdin> writer thread and send streams to its mailbox for writing
       (write-bytes self.stream request.stdin)))
-
-
-;; solution that waits for all chunks to arrive, then assembles them
-(define/table (<stdin>:deliver)
-  (define request (self:request))
-  (cond
-    ((zero? self.clen)
-     (write-bytes (self:assemble) request.stdin))
-    (else (request:push self))))
 
 
 ;;** - <stdout> -------------------------------------------------- *;;
