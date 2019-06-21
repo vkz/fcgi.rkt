@@ -8,6 +8,33 @@ FCGI  -*- mode: org; fill-column: 82 -*-
 
 * fcgi.rkt
 
+** TODO do we need timeouts or traps reading TCP in?
+  [2019-06-21 Fri]
+
+could record:parse ever block? I don't think so, cause if client ever drops, then
+the webserver would probably just drop connection to our FCGI and parse would
+simply fail. Now, we may still want to check for eof-object? or maybe even catch
+if reading fails so that we may clean up the resounces? Or would that happen
+automatically because we already custodian-shutdown on TCP closed?
+
+It gets trickier because there is also fcgi-abort-request to consider, so ws could
+e.g. cut short <stdin> then send <abort-request> and I guess we'd want to handle
+that gracefully. How the hell do I force Nginx to excibit such conditions?
+
+** DONE consider <incoming> and <outgoing> records
+CLOSED: [2019-06-21 Fri 17:31]
+
+- State "DONE"       from "TODO"       [2019-06-21 Fri 17:31] \\
+  For now I ended up simply adding an <outgoing> trait that mixes in :deliver
+  method.
+It is a reasonable split considering that :deliver works differently for the two
+categories.
+
+** TODO allow user breaks in fcgi threads and sync
+  [2019-06-21 Fri]
+
+guess I need to sprinkle dynamic-wind or smth
+
 ** DONE Gracefully handle TCP connection closure
 CLOSED: [2019-06-21 Fri 12:02]
 - State "DONE"       from "STARTED"    [2019-06-21 Fri 12:02] \\
@@ -34,6 +61,10 @@ resources somehow and that those are released and collected in timely fashion.
 
 ** TODO Management records
 ** TODO Implement parse, pack and deliver for every record
+- State "TODO"       from "STARTED"    [2019-06-21 Fri 16:18]
+:LOGBOOK:
+CLOCK: [2019-06-21 Fri 14:40]--[2019-06-21 Fri 16:17] =>  1:37
+:END:
 
 not required to implement the protocol, but it would make it possible to write
 standalone tests that don't require external webserver.
@@ -165,8 +196,12 @@ Somewhat fuzzy as to what this ought to actually be. Appears that it is like
 <stdout> to "respond" with some error page or something. I'd have to experiment
 and see if e.g. I send only <stderr> what the client gets.
 
-** TODO Chunking with read-bytes-avail!
+** DONE Chunking with read-bytes-avail!
+CLOSED: [2019-06-21 Fri 12:13]
 
+- State "DONE"       from "TODO"       [2019-06-21 Fri 12:13] \\
+  appears it is actually sane and it was my code at fault. Looks like
+  read-bytes-avail! does the right thing - no excessive chunking.
 Our connection-writer thread reads stdout bytes with ~read-bytes-avail~ which
 pretty consistently just grabs the first 8 bytes. This leads to unreasonably fine
 chunked stream and potentially significant overhead: every such chunk gets its own

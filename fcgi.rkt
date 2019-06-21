@@ -397,25 +397,7 @@
     ((eq? type FCGI_STDOUT)        <stdout>)
     ((eq? type FCGI_STDERR)        <stderr>)
     ((eq? type FCGI_END_REQUEST)   <end-request>)
-    (else                          <mock>)
-    ;; (else (raise-argument-error 'mt-of "known record type" type))
-    ))
-
-
-(define (type-of record-num)
-  (cond
-    ((eq? record-num FCGI_BEGIN_REQUEST)     :BEGIN_REQUEST)
-    ((eq? record-num FCGI_ABORT_REQUEST)     :ABORT_REQUEST)
-    ((eq? record-num FCGI_END_REQUEST)       :END_REQUEST)
-    ((eq? record-num FCGI_PARAMS)            :PARAMS)
-    ((eq? record-num FCGI_STDIN)             :STDIN)
-    ((eq? record-num FCGI_STDOUT)            :STDOUT)
-    ((eq? record-num FCGI_STDERR)            :STDERR)
-    ((eq? record-num FCGI_DATA)              :DATA)
-    ((eq? record-num FCGI_GET_VALUES)        :GET_VALUES)
-    ((eq? record-num FCGI_GET_VALUES_RESULT) :GET_VALUES_RESULT)
-    ((eq? record-num FCGI_UNKNOWN_TYPE)      :UNKNOWN_TYPE)
-    ((eq? record-num FCGI_MAXTYPE)           :MAXTYPE)))
+    (else (raise-argument-error 'mt-of "known record type" type))))
 
 
 ;;* <record> ----------------------------------------------------- *;;
@@ -427,6 +409,13 @@
                                   (:clen    (? integer?))
                                   (:plen    (? integer?))}
                   (:version FCGI_VERSION_1)})
+
+
+;; NOTE <record>:parse is always the entry point for parsing. It is here that the
+;; actual record type is determined and parsing continues in descendant's method:
+;; 1. parse fcgi-header to get record type,
+;; 2. swap record's (self) metatable to the one of that type,
+;; 3. continue parsing by calling :parse on itself (delegate to new metatable).
 
 
 (define/table (<record>:parse in)
@@ -443,9 +432,28 @@
   (get requests self.id))
 
 
+;; TODO any reasonable <record>:pack?
+
+
 (define/table (<record>:deliver)
   (define request (self:request))
   (request:push self))
+
+
+;; TODO don't forget to case-lambda its <setmeta> if I ever switch to optional 2nd
+;; arg in <setmeta> metamethods just for traits
+;;
+;; trait
+(define <outgoing> {(:<setmeta> (λ (t) (set t :deliver <outgoing>.deliver)))})
+
+
+(define/table (<outgoing>:deliver)
+  (define connection (current-connection))
+  (define message (self:pack))
+  (define count (write-bytes message connection.out))
+  (flush-output connection.out)
+  ;; TODO log correct record type here <stdout>, <stderr>, <data>, <end-request>
+  (printf "<outgoing>: ~a bytes delivered\n" count))
 
 
 ;;* <stream> ----------------------------------------------------- *;;
@@ -483,12 +491,17 @@
     (body :: binary))))
 
 
+;; delegate <stream>:deliver => <record>:deliver
+
+
 ;;** - <begin-request> ------------------------------------------- *;;
 
 
 (define <begin-request> {<record> #:check {<open> (:role (? integer?))
                                                   (:flags (? integer?))}
-                                  (:type FCGI_BEGIN_REQUEST)})
+                                  (:type FCGI_BEGIN_REQUEST)
+                                  (:clen 8)
+                                  (:plen 0)})
 
 
 (define/table (<begin-request>:parse in)
@@ -502,6 +515,7 @@
      (error "Failed to parse fcgi-begin-request"))))
 
 
+;; for completeness
 (define/table (<begin-request>:pack)
   (bit-string->bytes
    (bit-string
@@ -511,19 +525,16 @@
     (0 :: bytes 5))))
 
 
-(define/table (<begin-request>:request)
+(define/table (<begin-request>:deliver)
   (define connection (current-connection))
-  (connection:push {<request> (:id self.id)
-                              (:app app)}))
+  (define request {<request> (:id self.id) (:app app)})
+  (request:push self)
+  (connection:push request))
 
 
 (module+ test
   (test-case "<begin-request>"
-    (define/checked begin-request {<begin-request> (:version 1)
-                                                   (:type FCGI_BEGIN_REQUEST)
-                                                   (:id 1)
-                                                   (:clen 8)
-                                                   (:plen 0)
+    (define/checked begin-request {<begin-request> (:id 1)
                                                    (:role FCGI_RESPONDER)
                                                    (:flags FCGI_KEEP_CONN)})
 
@@ -532,13 +543,9 @@
     (define r {<record>})
     (define/checked parsed (r:parse (open-input-bytes packed)))
     (check-true (isa? parsed <begin-request>))
-    (check-equal? begin-request parsed)))
-
-
-(define <mock> {<record> (:parse (λ (r in)
-                                   (read-bytes (+ r.clen r.plen) in)
-                                   (set r :name (type-of r.type))
-                                   r))})
+    (check-eq? parsed.id begin-request.id)
+    (check-eq? parsed.role begin-request.role)
+    (check-eq? parsed.flags begin-request.flags)))
 
 
 ;;** - abort-request --------------------------------------------- *;;
@@ -555,6 +562,8 @@
   (or (string->number (get params "CONTENT_LENGTH")) 0))
 
 
+;; delegate <params>:parse => <stream>:parse
+;; delegate <params>:pack  => <stream>:pack
 (define/table (<params>:deliver)
   (define request (self:request))
   (cond
@@ -577,6 +586,10 @@
 (define <stdin> {<stream> (:type FCGI_STDIN)})
 
 
+;; delegate <params>:parse => <stream>:parse
+;; delegate <params>:pack => <stream>:pack
+
+
 ;; solution that waits for all chunks to arrive, then assembles them
 (define/table (<stdin>:deliver)
   (define request (self:request))
@@ -589,44 +602,30 @@
 ;; very general solution that potentially doesn't wait for <stdin> to finish
 #;(define/table (<stdin>:deliver)
     (define request (self:request))
-    (unless (zero? self.clen)
-      (request:push self)
-      ;; TODO make it non-blocking, but keep in mind that we maybe introducing a
-      ;; race with later <stdin> chunks, so either guard with semaphore or have a
-      ;; special <stdin> writer thread and send streams to its mailbox for writing
-      (write-bytes self.stream request.stdin)))
+    (request:push self)
+    (if (zero? self.clen)
+        (close-input-port request.stdin)
+        (write-bytes self.stream request.stdin)))
 
 
 ;;** - <stdout> -------------------------------------------------- *;;
 
 
-;; TODO consider <outgoing-record> as parent for <stdout>, <stderr> and
-;; <end-request> since their methods do pretty much the same thing.
-
-
-(define <stdout> {<stream> (:type FCGI_STDOUT)})
-
-
-(define/table (<stdout>:deliver)
-  (define connection (current-connection))
-  (define message (self:pack))
-  (define count (write-bytes message connection.out))
-  (flush-output connection.out)
-  (printf "<stdout>: ~a bytes delivered\n" count))
+(define <stdout> {<stream> #:direction <outgoing>
+                           (:type FCGI_STDOUT)})
+;; delegate <stdout>:parse   => <stream>:parse
+;; delegate <stdout>:pack    => <stream>:pack
+;; delegate <stdout>:deliver => <outgoing>:deliver
 
 
 ;;** - <stderr> -------------------------------------------------- *;;
 
 
-(define <stderr> {<stream> (:type FCGI_STDERR)})
-
-
-(define/table (<stderr>:deliver)
-  (define connection (current-connection))
-  (define message (self:pack))
-  (define count (write-bytes message connection.out))
-  (flush-output connection.out)
-  (printf "<stderr>: ~a bytes delivered\n" count))
+(define <stderr> {<stream> #:direction <outgoing>
+                           (:type FCGI_STDERR)})
+;; delegate <stderr>:parse   => <stream>:parse
+;; delegate <stderr>:pack    => <stream>:pack
+;; delegate <stderr>:deliver => <outgoing>:deliver
 
 
 ;;** - data ------------------------------------------------------ *;;
@@ -635,11 +634,22 @@
 ;;** - end-request ----------------------------------------------- *;;
 
 
-(define <end-request> {<record> (:type FCGI_END_REQUEST)
+(define <end-request> {<record> #:direction <outgoing>
+                                (:type FCGI_END_REQUEST)
                                 (:clen 8)
                                 (:plen 0)
                                 (:app-status 0)
                                 (:proto-status FCGI_REQUEST_COMPLETE)})
+
+
+;; for completeness
+(define/table (<end-request>:parse in)
+  (bit-string-case (read-bytes (+ self.clen self.plen) in)
+    ([(app-status :: integer bytes 4) proto-status (_ :: bytes 3)]
+     (set self :app-status app-status)
+     (set self :proto-status proto-status))
+    (else
+     (error "Failed to parse" (isa self)))))
 
 
 (define/table (<end-request>:pack)
@@ -651,12 +661,20 @@
     (0 :: bytes 3))))
 
 
-(define/table (<end-request>:deliver)
-  (define connection (current-connection))
-  (define message (self:pack))
-  (define count (write-bytes message connection.out))
-  (flush-output connection.out)
-  (printf "<end-request>: ~a bytes delivered\n" count))
+;; delegate <end-request>:deliver => <outgoing>:deliver
+
+
+(module+ test
+  (test-case "<end-request>"
+    (define/checked end-request {<end-request> (:id 1)})
+    (define/checked packed (end-request:pack))
+    (check-true (zero? (remainder (bytes-length packed) 8)))
+    (define r {<record>})
+    (define/checked parsed (r:parse (open-input-bytes packed)))
+    (check-true (isa? parsed <end-request>))
+    (check-eq? parsed.id end-request.id)
+    (check-eq? parsed.app-status end-request.app-status)
+    (check-eq? parsed.proto-status end-request.proto-status)))
 
 
 ;;* app ---------------------------------------------------------- *;;
