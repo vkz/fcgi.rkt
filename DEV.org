@@ -8,7 +8,21 @@ FCGI  -*- mode: org; fill-column: 82 -*-
 
 * fcgi.rkt
 
-** TODO Gracefully handle TCP connection closure
+** DONE Gracefully handle TCP connection closure
+CLOSED: [2019-06-21 Fri 12:02]
+- State "DONE"       from "STARTED"    [2019-06-21 Fri 12:02] \\
+  That was tricky - concurrency programming is hard. Appears that Nginx expects us
+  to close the connection to signal that request has been handled. Only after that
+  does it communcate back to the client. I think its just wrong. For now I close TCP
+  on our end, but going forward maybe worth checking connection.multiplex? and close
+  TCP if unset, loop if set. Naturally, the default should probably be unset and we
+  toggle it for webservers that support it (I assume here that such ws would
+  communicate this via management records).
+- State "TODO"       from "STARTED"    [2019-06-21 Fri 10:24]
+:LOGBOOK:
+CLOCK: [2019-06-21 Fri 10:27]--[2019-06-21 Fri 12:02] =>  1:35
+CLOCK: [2019-06-21 Fri 10:00]--[2019-06-21 Fri 10:24] =>  0:24
+:END:
 
 Some check needed somewhere before we attempt to do IO on the TCP connection.
 Appears Nginx immediately closes it having received FCGI repsonse.

@@ -248,6 +248,22 @@
   request)
 
 
+(define/table (<connection>:drop request)
+  (rm self.requests request.id))
+
+
+(define/table (<connection>:start-reader)
+  (set self :reader
+       (thread
+        (thunk
+         (let loop ((r {<record>}))
+           (unless (port-closed? self.in)
+             (r:parse self.in)
+             (displayln (isa r))
+             (r:deliver)
+             (loop {<record>})))))))
+
+
 (define/table (<connection>:start-writer)
   (set self :writer
        (thread
@@ -288,12 +304,19 @@
                              (set request :stderr-closed #t)))
                           ;; when both streams are closed consider request
                           ;; handled: send end-request and free resources
-                          (when (and request.stdout-closed request.stderr-closed)
+                          (when? (and? request.stdout-closed request.stderr-closed)
                             (let ((end-request {<end-request> (:id request.id)}))
                               (end-request:deliver)
+                              ;; this step is redundant
                               (set request :closed #t)
-                              ;; TODO (request:drop)
-                              ))
+                              (self:drop request)
+                              (displayln "request closed and dropped")
+                              ;; TODO Looks like Nginx expects us to close the
+                              ;; connection to signal end of request. This kinda
+                              ;; contradicts the spec. For now we could do:
+                              ;;
+                              ;; (unless? self.multiplex? (close-output-port self.out))
+                              (close-output-port self.out)))
                           (unless (port-closed? self.out)
                             (loop))))
 
@@ -301,7 +324,8 @@
                         (λ (port)
                           (displayln "connection.out closed"))))
 
-           (displayln "connection.writer closed"))))))
+           (displayln "connection.writer closed")
+           (custodian-shutdown-all self.custodian))))))
 
 
 (define current-connection (make-parameter undefined))
@@ -329,9 +353,14 @@
 
 (define/table (<request>:evt)
   ;; values: request pipe record-metatable
-  (define out (wrap-evt self.stdout (λ (_) (values self self.stdout <stdout>))))
-  (define err (wrap-evt self.stderr (λ (_) (values self self.stderr <stderr>))))
-  (choice-evt out err))
+  (choice-evt #;stdout
+              (wrap-evt
+               (if? self.stdout-closed never-evt self.stdout)
+               (λ (_) (values self self.stdout <stdout>)))
+              #;stderr
+              (wrap-evt
+               (if? self.stderr-closed never-evt self.stderr)
+               (λ (_) (values self self.stderr <stderr>)))))
 
 
 (define/table (<request>:<proc>)
@@ -583,8 +612,7 @@
   (define message (self:pack))
   (define count (write-bytes message connection.out))
   (flush-output connection.out)
-  (printf "<stdout>: ~a bytes delivered\n" count)
-  (displayln message))
+  (printf "<stdout>: ~a bytes delivered\n" count))
 
 
 ;;** - <stderr> -------------------------------------------------- *;;
@@ -595,7 +623,10 @@
 
 (define/table (<stderr>:deliver)
   (define connection (current-connection))
-  (write-bytes (self:pack) connection.out))
+  (define message (self:pack))
+  (define count (write-bytes message connection.out))
+  (flush-output connection.out)
+  (printf "<stderr>: ~a bytes delivered\n" count))
 
 
 ;;** - data ------------------------------------------------------ *;;
@@ -638,18 +669,6 @@
 
 
 ;;* Main --------------------------------------------------------- *;;
-
-
-(define/table (<connection>:start-reader)
-  (set self :reader
-       (thread
-        (thunk
-         (let loop ((r {<record>}))
-           (r:parse self.in)
-           (displayln (isa r))
-           (r:deliver)
-           (unless (port-closed? self.in)
-             (loop {<record>})))))))
 
 
 (define (main)
