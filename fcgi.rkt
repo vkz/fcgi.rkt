@@ -53,9 +53,9 @@
 
 
 ;; names allowed in FCGI_GET_VALUES / FCGI_GET_VALUES_RESULT records
-(define FCGI_MAX_CONNS  "FCGI_MAX_CONNS")
-(define FCGI_MAX_REQS   "FCGI_MAX_REQS")
-(define FCGI_MPXS_CONNS "FCGI_MPXS_CONNS")
+(define FCGI_MAX_CONNS  1000)
+(define FCGI_MAX_REQS   10000)
+(define FCGI_MPXS_CONNS 1)
 
 
 ;;* Bit twiddling --------------------------------------------------- *;;
@@ -299,8 +299,8 @@
                           (define record {<record> (:id request:id)
                                                    (:stream stream)})
                           (record::deliver)
-                          ;; TODO abstract this so we could simply do this:
-                          ;; (when (request::streams-closed?) (request::end))
+                          ;; TODO these really belong in :after deliver method
+                          ;; combinators, but we don't yet support those
                           (cond
                             ;; flag relevant stream as closed
                             ((and (empty-bytes? stream) (isa? record <stdout>))
@@ -398,12 +398,13 @@
 (define (mt-of type)
   (cond
     ((eq? type FCGI_BEGIN_REQUEST) <begin-request>)
+    ((eq? type FCGI_ABORT_REQUEST) <abort-request>)
     ((eq? type FCGI_PARAMS)        <params>)
     ((eq? type FCGI_STDIN)         <stdin>)
     ((eq? type FCGI_STDOUT)        <stdout>)
     ((eq? type FCGI_STDERR)        <stderr>)
     ((eq? type FCGI_END_REQUEST)   <end-request>)
-    (else (raise-argument-error 'mt-of "known record type" type))))
+    (else <unknown-type>)))
 
 
 ;;* <record> ----------------------------------------------------- *;;
@@ -495,7 +496,7 @@
 
 
 (define/table (<stream>::pack)
-  (define stream (or? self:stream #""))
+  (define stream (bytes-of (or (? self:stream) #"")))
   (define-values (plen padding body) (pad stream))
   (set self :clen (bytes-length stream))
   (set self :plen plen)
@@ -506,6 +507,23 @@
 
 
 ;; delegate <stream>::deliver => <record>::deliver
+
+
+;;* <management> ------------------------------------------------- *;;
+
+
+(define <management> {<record> #:check {<open> (:name-values (opt table?))}
+                               (:id FCGI_NULL_REQUEST_ID)})
+
+
+(define/table (<management>::parse in)
+  (:parse <stream> self in)
+  (set self :name-values (parse-name-values self:stream)))
+
+
+(define/table (<management>::pack)
+  (set self :stream (bytes-of (or (? self:name-values) (? self:stream) #"")))
+  (:pack <stream> self))
 
 
 ;;** - <begin-request> ------------------------------------------- *;;
@@ -591,9 +609,6 @@
 ;; in the browser. I hope Nginx sends an abort-request when that happens.
 
 
-;;** - get-values ------------------------------------------------ *;;
-;;** - get-values-result ----------------------------------------- *;;
-;;** - unknown --------------------------------------------------- *;;
 ;;** - <params> -------------------------------------------------- *;;
 
 
@@ -716,6 +731,62 @@
     (check-eq? parsed:id end-request:id)
     (check-eq? parsed:app-status end-request:app-status)
     (check-eq? parsed:proto-status end-request:proto-status)))
+
+
+;;** - <get-values> ---------------------------------------------- *;;
+
+
+(define <get-values> {<management> (:type FCGI_GET_VALUES)})
+
+;; delegate <get-values>::parse => <management>::parse
+;; delegate <get-values>::pack  => <management>::pack
+(define/table (<get-values>::deliver)
+  (::deliver
+   {<get-values-result>
+    (:name-values
+     {("FCGI_MAX_CONNS"  (and? (get self:name-values "FCGI_MAX_CONNS") FCGI_MAX_CONNS))
+      ("FCGI_MAX_REQS"   (and? (get self:name-values "FCGI_MAX_REQS") FCGI_MAX_REQS))
+      ("FCGI_MPXS_CONNS" (and? (get self:name-values "FCGI_MPXS_CONNS") FCGI_MPXS_CONNS))})}))
+
+
+;;** - <get-values-result> --------------------------------------- *;;
+
+
+(define <get-values-result> {<management> #:direction <outgoing>
+                                          (:type FCGI_GET_VALUES_RESULT)})
+
+
+;; delegate <get-values-result>::parse   => <management>::parse
+;; delegate <get-values-result>::pack    => <management>::pack
+;; delegate <get-values-result>::deliver => <outgoing>::deliver
+
+
+;;** - <unknown-type> -------------------------------------------- *;;
+
+
+(define <unknown-type> {<management> #:direction <outgoing>
+                                     #:check {<open> (:unknown (opt integer?))}
+                                     (:type FCGI_UNKNOWN_TYPE)})
+
+
+(define/table (<unknown-type>::parse in)
+  ;; drop the payload
+  (read-bytes (+ self:clen self:plen) in)
+  ;; cast this unknown record to <unknown-type>
+  (set self :unknown self:type)
+  (set self :type FCGI_UNKNOWN_TYPE)
+  (set self :id FCGI_NULL_REQUEST_ID)
+  (set self :clen 8)
+  (set self :plen 0))
+
+
+(define/table (<unknown-type>::pack)
+  (bit-string->bytes
+   (bit-string
+    (self :: (fcgi-header)) self:unknown (0 :: bytes 7))))
+
+
+;; delegate <unknown>::deliver => <outgoing>::deliver
 
 
 ;;* app ---------------------------------------------------------- *;;

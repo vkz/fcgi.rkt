@@ -19,6 +19,22 @@ Log every thread started or complete.
 If we do it right and manage to get reasonable timestamps, we could then use this
 log to visualize protocol flow.
 
+** TODO test record lifecycles [0/5]
+SCHEDULED: <2019-06-28 Fri>
+
+Some records are impossible to test if a webserver never bothers to send em e.g.
+<get-values> and some random unknown type (which we catch with <unknown-type>). I
+need a way to test these end to end. So I must be the one to act as a webserver.
+
+I suppose it means that I gotta connect to my fcgi backend and start send records
+to test.
+
+- [ ] <get-values>
+- [ ] <get-values-result>
+- [ ] <unknown-type>
+- [ ] <abort-request>
+- [ ] <stdin> non-empty
+
 ** TODO Manage resources [0/4]
 
 *** TODO do we need timeouts or traps reading TCP in?
@@ -56,14 +72,22 @@ CLOSED: [2019-06-28 Fri 16:12] SCHEDULED: <2019-06-28 Fri>
 CLOCK: [2019-06-28 Fri 15:08]--[2019-06-28 Fri 16:12] =>  1:04
 CLOCK: [2019-06-28 Fri 13:47]--[2019-06-28 Fri 14:54] =>  1:07
 :END:
-** TODO Management records [0/3]
-SCHEDULED: <2019-06-28 Fri>
-*** TODO <get-values>
-SCHEDULED: <2019-06-28 Fri>
-*** TODO <get-values-result>
-SCHEDULED: <2019-06-28 Fri>
-*** TODO <unknown-type>
-SCHEDULED: <2019-06-28 Fri>
+** DONE Management records [3/3]
+CLOSED: [2019-06-28 Fri 19:18] SCHEDULED: <2019-06-28 Fri>
+- State "DONE"       from "TODO"       [2019-06-28 Fri 19:18] \\
+  Need to figure out how to test these.
+*** DONE <get-values>
+CLOSED: [2019-06-28 Fri 19:18] SCHEDULED: <2019-06-28 Fri>
+- State "DONE"       from "STARTED"    [2019-06-28 Fri 19:18]
+:LOGBOOK:
+CLOCK: [2019-06-28 Fri 17:31]--[2019-06-28 Fri 19:18] =>  1:47
+:END:
+*** DONE <get-values-result>
+CLOSED: [2019-06-28 Fri 19:18] SCHEDULED: <2019-06-28 Fri>
+- State "DONE"       from "TODO"       [2019-06-28 Fri 19:18]
+*** DONE <unknown-type>
+CLOSED: [2019-06-28 Fri 19:18] SCHEDULED: <2019-06-28 Fri>
+- State "DONE"       from "TODO"       [2019-06-28 Fri 19:18]
 ** TODO <stderr>
 SCHEDULED: <2019-06-28 Fri>
 
@@ -72,7 +96,7 @@ Somewhat fuzzy as to what this ought to actually be. Appears that it is like
 and see if e.g. I send only <stderr> what the client gets.
 
 ** TODO #lang fcgi - what is fcgi app?
-SCHEDULED: <2019-06-28 Fri>
+SCHEDULED: <2019-06-29 Sat>
 
 - State "TODO"       from "IDEA"       [2019-06-20 Thu 12:13]
 Beginning to understand here. Our fcgi implementation should be nothing but the
