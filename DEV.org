@@ -48,8 +48,14 @@ particular I need to ensure that requests and records are GCed.
 
 threads, places, channels, etc. Maybe as part of its profiler?
 
-** TODO <abort-request>
-SCHEDULED: <2019-06-28 Fri>
+** DONE <abort-request>
+CLOSED: [2019-06-28 Fri 16:12] SCHEDULED: <2019-06-28 Fri>
+- State "DONE"       from "STARTED"    [2019-06-28 Fri 16:12]
+- State "TODO"       from "STARTED"    [2019-06-28 Fri 14:54]
+:LOGBOOK:
+CLOCK: [2019-06-28 Fri 15:08]--[2019-06-28 Fri 16:12] =>  1:04
+CLOCK: [2019-06-28 Fri 13:47]--[2019-06-28 Fri 14:54] =>  1:07
+:END:
 ** TODO Management records [0/3]
 SCHEDULED: <2019-06-28 Fri>
 *** TODO <get-values>

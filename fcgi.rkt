@@ -250,6 +250,13 @@
   (rm self:requests request:id))
 
 
+(define/table (<connection>::close)
+  (unless (? self:multiplexed)
+    (displayln "closing connection")
+    (flush-output self:out)
+    (close-output-port self:out)))
+
+
 (define/table (<connection>::start-reader)
   (set self :reader
        (thread
@@ -303,25 +310,17 @@
                           ;; when both streams are closed consider request
                           ;; handled: send end-request and free resources
                           (when? (and? request:stdout-closed request:stderr-closed)
-                            (let ((end-request {<end-request> (:id request:id)}))
-                              (end-request::deliver)
-                              ;; this step is redundant
-                              (set request :closed #t)
-                              (self::drop request)
-                              (displayln "request closed and dropped")
-                              ;; TODO Looks like Nginx expects us to close the
-                              ;; connection to signal end of request. This kinda
-                              ;; contradicts the spec. For now we could do:
-                              ;;
-                              ;; (unless? self:multiplex? (close-output-port self:out))
-                              (close-output-port self:out)))
-                          (unless (port-closed? self:out)
-                            (loop))))
+                            (::gc request)
+                            (::deliver {<end-request> (:id request:id)}))
+                          (loop)))
 
             (handle-evt (port-closed-evt self:out)
                         (λ (port)
                           (displayln "connection:out closed"))))
 
+           ;; TODO ATM we rudely shutdown everything, but when multiplexing
+           ;; requests we should probably notify every request and allow them time
+           ;; to clean up gracefully and shutdown on reasonable timeout.
            (displayln "connection:writer closed")
            (custodian-shutdown-all self:custodian))))))
 
@@ -380,6 +379,15 @@
   (set self :records (cons record (or? self:records '()))))
 
 
+(define/table (<request>::gc)
+  (define request self)
+  (define thread (? request:thread))
+  (define connection (current-connection))
+  (when thread (kill-thread thread))
+  (connection::drop self)
+  (printf "<request> ~a dropped\n" request:id))
+
+
 ;; {(request-id <request>)}
 (define <requests> {<table/evt> (:evt (λ (t) (apply choice-evt (dict-values t))))})
 
@@ -406,7 +414,9 @@
                                   (:id      (opt integer?))
                                   (:clen    (opt integer?))
                                   (:plen    (opt integer?))}
-                  (:version FCGI_VERSION_1)})
+                  (:version FCGI_VERSION_1)
+                  (:clen 0)
+                  (:plen 0)})
 
 
 ;; NOTE <record>::parse is always the entry point for parsing. It is here that the
@@ -422,6 +432,12 @@
      (set-table-meta! r (mt-of r:type))
      (r::parse in))
     (else (error "Failed to parse fcgi-header"))))
+
+
+(define/table (<record>::pack)
+  ;; there isn't really a reasonable default here, so lets just delegate to
+  ;; <stream>. In most cases this well simply pack record with empty payload.
+  (<stream>:pack self))
 
 
 (define/table (<record>::request)
@@ -451,7 +467,7 @@
   (define count (write-bytes message connection:out))
   (flush-output connection:out)
   ;; TODO log correct record type here <stdout>, <stderr>, <data>, <end-request>
-  (printf "<outgoing>:: ~a bytes delivered\n" count))
+  (printf "<outgoing>::~a ~a bytes delivered\n" self:type count))
 
 
 ;;* <stream> ----------------------------------------------------- *;;
@@ -498,8 +514,7 @@
 (define <begin-request> {<record> #:check {<open> (:role (opt integer?))
                                                   (:flags (opt integer?))}
                                   (:type FCGI_BEGIN_REQUEST)
-                                  (:clen 8)
-                                  (:plen 0)})
+                                  (:clen 8)})
 
 
 (define/table (<begin-request>::parse in)
@@ -546,7 +561,36 @@
     (check-eq? parsed:flags begin-request:flags)))
 
 
-;;** - abort-request --------------------------------------------- *;;
+;;** - <abort-request> ------------------------------------------- *;;
+
+
+(define <abort-request> {<record> (:type FCGI_ABORT_REQUEST)})
+
+
+(define/table (<abort-request>::parse in)
+  ;; meant to be empty, we read to throw away to be safe
+  (read-bytes (+ self:clen self:plen) in))
+
+
+;; delegate <abort-request>::pack  => <record>::pack
+
+
+(define/table (<abort-request>::deliver)
+  (define request (self::request))
+  ;; TODO if the (? request:thread) is running we ought to notify it and allow
+  ;; some time for the app to clean up. We timestamp in case we decide to go with
+  ;; manual periodic GC of aborted requests.
+  ;;
+  ;;   (set request :aborted (current-inexact-milliseconds))
+  ;;   (thread-send thread :abort-request)
+  (::gc request)
+  (::deliver {<end-request> (:id request:id)}))
+
+
+;; TODO to test this I'd probably want some long-running app, so that I can ABORT
+;; in the browser. I hope Nginx sends an abort-request when that happens.
+
+
 ;;** - get-values ------------------------------------------------ *;;
 ;;** - get-values-result ----------------------------------------- *;;
 ;;** - unknown --------------------------------------------------- *;;
@@ -632,7 +676,6 @@
 (define <end-request> {<record> #:direction <outgoing>
                                 (:type FCGI_END_REQUEST)
                                 (:clen 8)
-                                (:plen 0)
                                 (:app-status 0)
                                 (:proto-status FCGI_REQUEST_COMPLETE)})
 
@@ -656,7 +699,10 @@
     (0 :: bytes 3))))
 
 
-;; delegate <end-request>::deliver => <outgoing>::deliver
+(define/table (<end-request>::deliver)
+  ;; outgoing will deliver
+  (:deliver <outgoing> self)
+  (::close (current-connection)))
 
 
 (module+ test
