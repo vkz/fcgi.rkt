@@ -1,6 +1,4 @@
-#lang prelude
-
-(require prelude/tables)
+#lang racket/tables
 
 (require bitsyntax
          racket/generic
@@ -180,7 +178,7 @@
     ((_ #f record)
      (let ((r record))
        (bit-string
-        r.version r.type (r.id :: bytes 2) (r.clen :: bytes 2) r.plen #;reserved 0)))))
+        r:version r:type (r:id :: bytes 2) (r:clen :: bytes 2) r:plen #;reserved 0)))))
 
 
 (module+ test
@@ -233,38 +231,38 @@
 ;;* Requests ----------------------------------------------------- *;;
 
 
-(define <connection> {#:check {<open> (:in (? input-port?))
-                                      (:out (? output-port?))
-                                      (:requests (? table?))}})
+(define <connection> {#:check {<open> (:in (opt input-port?))
+                                      (:out (opt output-port?))
+                                      (:requests (opt table?))}})
 
 
-(define/table (<connection>:push request)
+(define/table (<connection>::push request)
   ;; TODO check for duplicate request ids?
-  (set (or? self.requests (begin (set self :requests {<requests>}) self.requests))
-       request.id
+  (set (or? self:requests (begin (set self :requests {<requests>}) self:requests))
+       request:id
        request)
-  ;; notify connection.writer thread of the new request
-  (thread-send self.writer request)
+  ;; notify connection:writer thread of the new request
+  (thread-send self:writer request)
   request)
 
 
-(define/table (<connection>:drop request)
-  (rm self.requests request.id))
+(define/table (<connection>::drop request)
+  (rm self:requests request:id))
 
 
-(define/table (<connection>:start-reader)
+(define/table (<connection>::start-reader)
   (set self :reader
        (thread
         (thunk
          (let loop ((r {<record>}))
-           (unless (port-closed? self.in)
-             (r:parse self.in)
+           (unless (port-closed? self:in)
+             (r::parse self:in)
              (displayln (isa r))
-             (r:deliver)
+             (r::deliver)
              (loop {<record>})))))))
 
 
-(define/table (<connection>:start-writer)
+(define/table (<connection>::start-writer)
   (set self :writer
        (thread
         (thunk
@@ -278,24 +276,24 @@
                           (cond
                             ;; new request => (loop)
                             ((and (table? mail) (isa? mail <request>)))
-                            (else (raise-argument-error 'connection.writer
+                            (else (raise-argument-error 'connection:writer
                                                         "<request>" mail)))
-                          (unless (port-closed? self.out)
+                          (unless (port-closed? self:out)
                             (loop))))
 
-            (handle-evt self.requests
+            (handle-evt self:requests
                         (λ (request port <record>)
-                          ;; TODO I could move this to <outgoing-record>:pack and
-                          ;; <outgoing-record>:deliver
+                          ;; TODO I could move this to <outgoing-record>::pack and
+                          ;; <outgoing-record>::deliver
                           (define buffer (make-bytes 65535))
                           (define count (read-bytes-avail! buffer port))
                           (define stream (if (eof-object? count) #""
                                              (subbytes buffer 0 count)))
-                          (define record {<record> (:id request.id)
+                          (define record {<record> (:id request:id)
                                                    (:stream stream)})
-                          (record:deliver)
+                          (record::deliver)
                           ;; TODO abstract this so we could simply do this:
-                          ;; (when (request:streams-closed?) (request:end))
+                          ;; (when (request::streams-closed?) (request::end))
                           (cond
                             ;; flag relevant stream as closed
                             ((and (empty-bytes? stream) (isa? record <stdout>))
@@ -304,28 +302,28 @@
                              (set request :stderr-closed #t)))
                           ;; when both streams are closed consider request
                           ;; handled: send end-request and free resources
-                          (when? (and? request.stdout-closed request.stderr-closed)
-                            (let ((end-request {<end-request> (:id request.id)}))
-                              (end-request:deliver)
+                          (when? (and? request:stdout-closed request:stderr-closed)
+                            (let ((end-request {<end-request> (:id request:id)}))
+                              (end-request::deliver)
                               ;; this step is redundant
                               (set request :closed #t)
-                              (self:drop request)
+                              (self::drop request)
                               (displayln "request closed and dropped")
                               ;; TODO Looks like Nginx expects us to close the
                               ;; connection to signal end of request. This kinda
                               ;; contradicts the spec. For now we could do:
                               ;;
-                              ;; (unless? self.multiplex? (close-output-port self.out))
-                              (close-output-port self.out)))
-                          (unless (port-closed? self.out)
+                              ;; (unless? self:multiplex? (close-output-port self:out))
+                              (close-output-port self:out)))
+                          (unless (port-closed? self:out)
                             (loop))))
 
-            (handle-evt (port-closed-evt self.out)
+            (handle-evt (port-closed-evt self:out)
                         (λ (port)
-                          (displayln "connection.out closed"))))
+                          (displayln "connection:out closed"))))
 
-           (displayln "connection.writer closed")
-           (custodian-shutdown-all self.custodian))))))
+           (displayln "connection:writer closed")
+           (custodian-shutdown-all self:custodian))))))
 
 
 (define current-connection (make-parameter undefined))
@@ -340,46 +338,46 @@
       (port source sink))))
 
 
-(define <request> {<table/evt> #:check {<open> (:id      (? integer?))
-                                               (:records (? list?))
-                                               (:params  (? table?))
-                                               (:stdin   (? port?))
-                                               (:stdout  (? port?))
-                                               (:stderr  (? port?))
-                                               (:data    (? port?))
-                                               (:app     (? procedure?))
-                                               (:thread  (? thread?))}})
+(define <request> {<table/evt> #:check {<open> (:id      (opt integer?))
+                                               (:records (opt list?))
+                                               (:params  (opt table?))
+                                               (:stdin   (opt port?))
+                                               (:stdout  (opt port?))
+                                               (:stderr  (opt port?))
+                                               (:data    (opt port?))
+                                               (:app     (opt procedure?))
+                                               (:thread  (opt thread?))}})
 
 
-(define/table (<request>:evt)
+(define/table (<request>::evt)
   ;; values: request pipe record-metatable
   (choice-evt #;stdout
               (wrap-evt
-               (if? self.stdout-closed never-evt self.stdout)
-               (λ (_) (values self self.stdout <stdout>)))
+               (if? self:stdout-closed never-evt self:stdout)
+               (λ (_) (values self self:stdout <stdout>)))
               #;stderr
               (wrap-evt
-               (if? self.stderr-closed never-evt self.stderr)
-               (λ (_) (values self self.stderr <stderr>)))))
+               (if? self:stderr-closed never-evt self:stderr)
+               (λ (_) (values self self:stderr <stderr>)))))
 
 
-(define/table (<request>:<proc>)
+(define/table (<request>::<proc>)
   (set self :thread
        (thread
         (thunk
-         (parameterize ((current-input-port self.stdin)
-                        (current-output-port self.stdout)
-                        (current-error-port self.stderr))
-           (define end-request {<end-request> (:id self.id)})
-           (self:app)
-           (close-output-port self.stdout)
+         (parameterize ((current-input-port self:stdin)
+                        (current-output-port self:stdout)
+                        (current-error-port self:stderr))
+           (define end-request {<end-request> (:id self:id)})
+           (self::app)
+           (close-output-port self:stdout)
            ;; TODO hm, this would result in us sending a closing <stderr>, which
            ;; may not be what we wanted. But maybe it'll be ignored?
-           (close-output-port self.stderr))))))
+           (close-output-port self:stderr))))))
 
 
-(define/table (<request>:push record)
-  (set self :records (cons record (or? self.records '()))))
+(define/table (<request>::push record)
+  (set self :records (cons record (or? self:records '()))))
 
 
 ;; {(request-id <request>)}
@@ -403,68 +401,68 @@
 ;;* <record> ----------------------------------------------------- *;;
 
 
-(define <record> {#:check {<open> (:version (? integer?))
-                                  (:type    (? integer?))
-                                  (:id      (? integer?))
-                                  (:clen    (? integer?))
-                                  (:plen    (? integer?))}
+(define <record> {#:check {<open> (:version (opt integer?))
+                                  (:type    (opt integer?))
+                                  (:id      (opt integer?))
+                                  (:clen    (opt integer?))
+                                  (:plen    (opt integer?))}
                   (:version FCGI_VERSION_1)})
 
 
-;; NOTE <record>:parse is always the entry point for parsing. It is here that the
+;; NOTE <record>::parse is always the entry point for parsing. It is here that the
 ;; actual record type is determined and parsing continues in descendant's method:
 ;; 1. parse fcgi-header to get record type,
 ;; 2. swap record's (self) metatable to the one of that type,
 ;; 3. continue parsing by calling :parse on itself (delegate to new metatable).
 
 
-(define/table (<record>:parse in)
+(define/table (<record>::parse in)
   (bit-string-case (read-bytes 8 in)
     ([(r :: (fcgi-header self))]
-     (set-table-meta! r (mt-of r.type))
-     (r:parse in))
+     (set-table-meta! r (mt-of r:type))
+     (r::parse in))
     (else (error "Failed to parse fcgi-header"))))
 
 
-(define/table (<record>:request)
+(define/table (<record>::request)
   (define connection (current-connection))
   (define requests (get connection :requests))
-  (get requests self.id))
+  (get requests self:id))
 
 
-;; TODO any reasonable <record>:pack?
+;; TODO any reasonable <record>::pack?
 
 
-(define/table (<record>:deliver)
-  (define request (self:request))
-  (request:push self))
+(define/table (<record>::deliver)
+  (define request (self::request))
+  (request::push self))
 
 
 ;; TODO don't forget to case-lambda its <setmeta> if I ever switch to optional 2nd
 ;; arg in <setmeta> metamethods just for traits
 ;;
 ;; trait
-(define <outgoing> {(:<setmeta> (λ (t) (set t :deliver <outgoing>.deliver)))})
+(define <outgoing> {(:<setmeta> (λ (t) (set t :deliver <outgoing>:deliver)))})
 
 
-(define/table (<outgoing>:deliver)
+(define/table (<outgoing>::deliver)
   (define connection (current-connection))
-  (define message (self:pack))
-  (define count (write-bytes message connection.out))
-  (flush-output connection.out)
+  (define message (self::pack))
+  (define count (write-bytes message connection:out))
+  (flush-output connection:out)
   ;; TODO log correct record type here <stdout>, <stderr>, <data>, <end-request>
-  (printf "<outgoing>: ~a bytes delivered\n" count))
+  (printf "<outgoing>:: ~a bytes delivered\n" count))
 
 
 ;;* <stream> ----------------------------------------------------- *;;
 
 
-(define <stream> {<record> #:check {<open> (:stream (? bytes?))}})
+(define <stream> {<record> #:check {<open> (:stream (opt bytes?))}})
 
 
-(define/table (<stream>:parse in)
-  (define clen self.clen)
-  (define plen self.plen)
+(define/table (<stream>::parse in)
+  (define clen self:clen)
+  (define plen self:plen)
   (bit-string-case (read-bytes (+ clen plen) in)
     ([(stream :: binary bytes clen) (_ :: bytes plen)]
      (set self :stream (bit-string->bytes stream)))
@@ -472,16 +470,16 @@
      (error "Failed to parse" (isa self)))))
 
 
-(define/table (<stream>:assemble)
-  (define request (self:request))
+(define/table (<stream>::assemble)
+  (define request (self::request))
   (bytes-append*
-   (for/list ((r (in-list request.records))
-              #:when (eq? r.type self.type))
-     r.stream)))
+   (for/list ((r (in-list request:records))
+              #:when (eq? r:type self:type))
+     r:stream)))
 
 
-(define/table (<stream>:pack)
-  (define stream (or? self.stream #""))
+(define/table (<stream>::pack)
+  (define stream (or? self:stream #""))
   (define-values (plen padding body) (pad stream))
   (set self :clen (bytes-length stream))
   (set self :plen plen)
@@ -491,22 +489,22 @@
     (body :: binary))))
 
 
-;; delegate <stream>:deliver => <record>:deliver
+;; delegate <stream>::deliver => <record>::deliver
 
 
 ;;** - <begin-request> ------------------------------------------- *;;
 
 
-(define <begin-request> {<record> #:check {<open> (:role (? integer?))
-                                                  (:flags (? integer?))}
+(define <begin-request> {<record> #:check {<open> (:role (opt integer?))
+                                                  (:flags (opt integer?))}
                                   (:type FCGI_BEGIN_REQUEST)
                                   (:clen 8)
                                   (:plen 0)})
 
 
-(define/table (<begin-request>:parse in)
+(define/table (<begin-request>::parse in)
   (define r self)
-  (define body (read-bytes (+ r.clen r.plen) in))
+  (define body (read-bytes (+ r:clen r:plen) in))
   (bit-string-case body
     ([(role :: bytes 2) flags (_ :: bytes 5)]
      (set r :role role)
@@ -516,20 +514,20 @@
 
 
 ;; for completeness
-(define/table (<begin-request>:pack)
+(define/table (<begin-request>::pack)
   (bit-string->bytes
    (bit-string
     (self :: (fcgi-header))
-    (self.role :: bytes 2)
-    self.flags
+    (self:role :: bytes 2)
+    self:flags
     (0 :: bytes 5))))
 
 
-(define/table (<begin-request>:deliver)
+(define/table (<begin-request>::deliver)
   (define connection (current-connection))
-  (define request {<request> (:id self.id) (:app app)})
-  (request:push self)
-  (connection:push request))
+  (define request {<request> (:id self:id) (:app app)})
+  (request::push self)
+  (connection::push request))
 
 
 (module+ test
@@ -538,14 +536,14 @@
                                                    (:role FCGI_RESPONDER)
                                                    (:flags FCGI_KEEP_CONN)})
 
-    (define/checked packed (begin-request:pack))
+    (define/checked packed (begin-request::pack))
     (check-true (zero? (remainder (bytes-length packed) 8)))
     (define r {<record>})
-    (define/checked parsed (r:parse (open-input-bytes packed)))
+    (define/checked parsed (r::parse (open-input-bytes packed)))
     (check-true (isa? parsed <begin-request>))
-    (check-eq? parsed.id begin-request.id)
-    (check-eq? parsed.role begin-request.role)
-    (check-eq? parsed.flags begin-request.flags)))
+    (check-eq? parsed:id begin-request:id)
+    (check-eq? parsed:role begin-request:role)
+    (check-eq? parsed:flags begin-request:flags)))
 
 
 ;;** - abort-request --------------------------------------------- *;;
@@ -562,22 +560,19 @@
   (or (string->number (get params "CONTENT_LENGTH")) 0))
 
 
-;; delegate <params>:parse => <stream>:parse
-;; delegate <params>:pack  => <stream>:pack
-(define/table (<params>:deliver)
-  (define request (self:request))
+;; delegate <params>::parse => <stream>::parse
+;; delegate <params>::pack  => <stream>::pack
+(define/table (<params>::deliver)
+  (define request (self::request))
   (cond
-    ((zero? self.clen)
-     (set request :params (parse-name-values (self:assemble)))
-     (set request :stdin (make-port (content-length request.params)))
+    ((zero? self:clen)
+     (set request :params (parse-name-values (self::assemble)))
+     (set request :stdin (make-port (content-length request:params)))
      (set request :stdout (make-port))
      (set request :stderr (make-port))
      ;; run the app
      (request))
-    (else (request:push self))
-    ;; TODO I would want to call (self:deliver) here but with current ::
-    ;; semantics we end up calling the same method, hm.
-    ))
+    (else (request::push self))))
 
 
 ;;** - <stdin> --------------------------------------------------- *;;
@@ -586,26 +581,26 @@
 (define <stdin> {<stream> (:type FCGI_STDIN)})
 
 
-;; delegate <params>:parse => <stream>:parse
-;; delegate <params>:pack => <stream>:pack
+;; delegate <params>::parse => <stream>::parse
+;; delegate <params>::pack => <stream>::pack
 
 
 ;; solution that waits for all chunks to arrive, then assembles them
-(define/table (<stdin>:deliver)
-  (define request (self:request))
+(define/table (<stdin>::deliver)
+  (define request (self::request))
   (cond
-    ((zero? self.clen)
-     (write-bytes (self:assemble) request.stdin))
-    (else (request:push self))))
+    ((zero? self:clen)
+     (write-bytes (self::assemble) request:stdin))
+    (else (request::push self))))
 
 
 ;; very general solution that potentially doesn't wait for <stdin> to finish
-#;(define/table (<stdin>:deliver)
-    (define request (self:request))
-    (request:push self)
-    (if (zero? self.clen)
-        (close-input-port request.stdin)
-        (write-bytes self.stream request.stdin)))
+#;(define/table (<stdin>::deliver)
+    (define request (self::request))
+    (request::push self)
+    (if (zero? self:clen)
+        (close-input-port request:stdin)
+        (write-bytes self:stream request:stdin)))
 
 
 ;;** - <stdout> -------------------------------------------------- *;;
@@ -613,9 +608,9 @@
 
 (define <stdout> {<stream> #:direction <outgoing>
                            (:type FCGI_STDOUT)})
-;; delegate <stdout>:parse   => <stream>:parse
-;; delegate <stdout>:pack    => <stream>:pack
-;; delegate <stdout>:deliver => <outgoing>:deliver
+;; delegate <stdout>::parse   => <stream>::parse
+;; delegate <stdout>::pack    => <stream>::pack
+;; delegate <stdout>::deliver => <outgoing>::deliver
 
 
 ;;** - <stderr> -------------------------------------------------- *;;
@@ -623,9 +618,9 @@
 
 (define <stderr> {<stream> #:direction <outgoing>
                            (:type FCGI_STDERR)})
-;; delegate <stderr>:parse   => <stream>:parse
-;; delegate <stderr>:pack    => <stream>:pack
-;; delegate <stderr>:deliver => <outgoing>:deliver
+;; delegate <stderr>::parse   => <stream>::parse
+;; delegate <stderr>::pack    => <stream>::pack
+;; delegate <stderr>::deliver => <outgoing>::deliver
 
 
 ;;** - data ------------------------------------------------------ *;;
@@ -643,8 +638,8 @@
 
 
 ;; for completeness
-(define/table (<end-request>:parse in)
-  (bit-string-case (read-bytes (+ self.clen self.plen) in)
+(define/table (<end-request>::parse in)
+  (bit-string-case (read-bytes (+ self:clen self:plen) in)
     ([(app-status :: integer bytes 4) proto-status (_ :: bytes 3)]
      (set self :app-status app-status)
      (set self :proto-status proto-status))
@@ -652,29 +647,29 @@
      (error "Failed to parse" (isa self)))))
 
 
-(define/table (<end-request>:pack)
+(define/table (<end-request>::pack)
   (bit-string->bytes
    (bit-string
     (self :: (fcgi-header))
-    (self.app-status :: bytes 4)
-    self.proto-status
+    (self:app-status :: bytes 4)
+    self:proto-status
     (0 :: bytes 3))))
 
 
-;; delegate <end-request>:deliver => <outgoing>:deliver
+;; delegate <end-request>::deliver => <outgoing>::deliver
 
 
 (module+ test
   (test-case "<end-request>"
     (define/checked end-request {<end-request> (:id 1)})
-    (define/checked packed (end-request:pack))
+    (define/checked packed (end-request::pack))
     (check-true (zero? (remainder (bytes-length packed) 8)))
     (define r {<record>})
-    (define/checked parsed (r:parse (open-input-bytes packed)))
+    (define/checked parsed (r::parse (open-input-bytes packed)))
     (check-true (isa? parsed <end-request>))
-    (check-eq? parsed.id end-request.id)
-    (check-eq? parsed.app-status end-request.app-status)
-    (check-eq? parsed.proto-status end-request.proto-status)))
+    (check-eq? parsed:id end-request:id)
+    (check-eq? parsed:app-status end-request:app-status)
+    (check-eq? parsed:proto-status end-request:proto-status)))
 
 
 ;;* app ---------------------------------------------------------- *;;
@@ -707,8 +702,8 @@
         (displayln "client connected")
         (set connection :in in)
         (set connection :out out)
-        (connection:start-writer)
-        (connection:start-reader)))
+        (connection::start-writer)
+        (connection::start-reader)))
     (loop)))
 
 

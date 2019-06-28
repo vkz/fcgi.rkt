@@ -8,7 +8,20 @@ FCGI  -*- mode: org; fill-column: 82 -*-
 
 * fcgi.rkt
 
-** TODO do we need timeouts or traps reading TCP in?
+** TODO Add proper logging
+SCHEDULED: <2019-06-28 Fri>
+
+Log every record received.
+Log every record sent.
+Log every request started or complete.
+Log every thread started or complete.
+
+If we do it right and manage to get reasonable timestamps, we could then use this
+log to visualize protocol flow.
+
+** TODO Manage resources [0/4]
+
+*** TODO do we need timeouts or traps reading TCP in?
   [2019-06-21 Fri]
 
 could record:parse ever block? I don't think so, cause if client ever drops, then
@@ -21,66 +34,39 @@ It gets trickier because there is also fcgi-abort-request to consider, so ws cou
 e.g. cut short <stdin> then send <abort-request> and I guess we'd want to handle
 that gracefully. How the hell do I force Nginx to excibit such conditions?
 
-** DONE consider <incoming> and <outgoing> records
-CLOSED: [2019-06-21 Fri 17:31]
-
-- State "DONE"       from "TODO"       [2019-06-21 Fri 17:31] \\
-  For now I ended up simply adding an <outgoing> trait that mixes in :deliver
-  method.
-It is a reasonable split considering that :deliver works differently for the two
-categories.
-
-** TODO allow user breaks in fcgi threads and sync
+*** TODO allow user breaks in fcgi threads and sync
   [2019-06-21 Fri]
 
-guess I need to sprinkle dynamic-wind or smth
+guess I need to sprinkle dynamic-wind or smth - read more about such things.
 
-** DONE Gracefully handle TCP connection closure
-CLOSED: [2019-06-21 Fri 12:02]
-- State "DONE"       from "STARTED"    [2019-06-21 Fri 12:02] \\
-  That was tricky - concurrency programming is hard. Appears that Nginx expects us
-  to close the connection to signal that request has been handled. Only after that
-  does it communcate back to the client. I think its just wrong. For now I close TCP
-  on our end, but going forward maybe worth checking connection.multiplex? and close
-  TCP if unset, loop if set. Naturally, the default should probably be unset and we
-  toggle it for webservers that support it (I assume here that such ws would
-  communicate this via management records).
-- State "TODO"       from "STARTED"    [2019-06-21 Fri 10:24]
-:LOGBOOK:
-CLOCK: [2019-06-21 Fri 10:27]--[2019-06-21 Fri 12:02] =>  1:35
-CLOCK: [2019-06-21 Fri 10:00]--[2019-06-21 Fri 10:24] =>  0:24
-:END:
+*** TODO ensure we don't leak memory
 
-Some check needed somewhere before we attempt to do IO on the TCP connection.
-Appears Nginx immediately closes it having received FCGI repsonse.
+TCP connections, threads, requests and records must be released after use. In
+particular I need to ensure that requests and records are GCed.
 
-** TODO Ensure resources are managed correctly
+*** TODO what tools does Racket have to monitor resources?
 
-TCP connections, threads, requests and records. I must ensure we don't leak
-resources somehow and that those are released and collected in timely fashion.
-
-** TODO Management records
-** TODO Implement parse, pack and deliver for every record
-- State "TODO"       from "STARTED"    [2019-06-21 Fri 16:18]
-:LOGBOOK:
-CLOCK: [2019-06-21 Fri 14:40]--[2019-06-21 Fri 16:17] =>  1:37
-:END:
-
-not required to implement the protocol, but it would make it possible to write
-standalone tests that don't require external webserver.
-
-** TODO Add proper logging
-
-Log every record received.
-Log every record sent.
-Log every request started or complete.
-Log every thread started or complete.
-
-If we do it right and manage to get reasonable timestamps, we could then use this
-log to visualize protocol flow.
+threads, places, channels, etc. Maybe as part of its profiler?
 
 ** TODO <abort-request>
+SCHEDULED: <2019-06-28 Fri>
+** TODO Management records [0/3]
+SCHEDULED: <2019-06-28 Fri>
+*** TODO <get-values>
+SCHEDULED: <2019-06-28 Fri>
+*** TODO <get-values-result>
+SCHEDULED: <2019-06-28 Fri>
+*** TODO <unknown-type>
+SCHEDULED: <2019-06-28 Fri>
+** TODO <stderr>
+SCHEDULED: <2019-06-28 Fri>
+
+Somewhat fuzzy as to what this ought to actually be. Appears that it is like
+<stdout> to "respond" with some error page or something. I'd have to experiment
+and see if e.g. I send only <stderr> what the client gets.
+
 ** TODO #lang fcgi - what is fcgi app?
+SCHEDULED: <2019-06-28 Fri>
 
 - State "TODO"       from "IDEA"       [2019-06-20 Thu 12:13]
 Beginning to understand here. Our fcgi implementation should be nothing but the
@@ -190,11 +176,67 @@ Alternative with fine grained control over the app:
         (current-error-port))
 #+end_src
 
-** TODO <stderr>
+** TODO Other roles [0/2]
 
-Somewhat fuzzy as to what this ought to actually be. Appears that it is like
-<stdout> to "respond" with some error page or something. I'd have to experiment
-and see if e.g. I send only <stderr> what the client gets.
+Although I admit I haven't the foggiest why or when they would ever be used. Can I
+find some examples in the wild?
+
+*** TODO authorizer role
+
+*** TODO filter role
+
+** TODO Implement parse, pack and deliver for every record
+- State "TODO"       from "STARTED"    [2019-06-21 Fri 16:18]
+:LOGBOOK:
+CLOCK: [2019-06-21 Fri 14:40]--[2019-06-21 Fri 16:17] =>  1:37
+:END:
+
+not required to implement the protocol, but it would make it possible to write
+standalone tests that don't require external webserver.
+
+** TODO Measure performance
+
+*** TODO Measure absolute perf with apache-bench
+SCHEDULED: <2019-06-28 Fri>
+
+- State "TODO"       from "IDEA"       [2019-06-16 Sun 11:30]
+
+*** IDEA Compare perf with Racket SCGI
+CLOSED: [2019-06-18 Tue 10:48]
+
+*** IDEA Compare perf with kcgi
+CLOSED: [2019-06-11 Tue 13:34]
+
+*** IDEA Compare with Racket webserver
+CLOSED: [2019-06-23 Sun 11:05]
+
+** DONE consider <incoming> and <outgoing> records
+CLOSED: [2019-06-21 Fri 17:31]
+
+- State "DONE"       from "TODO"       [2019-06-21 Fri 17:31] \\
+  For now I ended up simply adding an <outgoing> trait that mixes in :deliver
+  method.
+It is a reasonable split considering that :deliver works differently for the two
+categories.
+
+** DONE Gracefully handle TCP connection closure
+CLOSED: [2019-06-21 Fri 12:02]
+- State "DONE"       from "STARTED"    [2019-06-21 Fri 12:02] \\
+  That was tricky - concurrency programming is hard. Appears that Nginx expects us
+  to close the connection to signal that request has been handled. Only after that
+  does it communcate back to the client. I think its just wrong. For now I close TCP
+  on our end, but going forward maybe worth checking connection.multiplex? and close
+  TCP if unset, loop if set. Naturally, the default should probably be unset and we
+  toggle it for webservers that support it (I assume here that such ws would
+  communicate this via management records).
+- State "TODO"       from "STARTED"    [2019-06-21 Fri 10:24]
+:LOGBOOK:
+CLOCK: [2019-06-21 Fri 10:27]--[2019-06-21 Fri 12:02] =>  1:35
+CLOCK: [2019-06-21 Fri 10:00]--[2019-06-21 Fri 10:24] =>  0:24
+:END:
+
+Some check needed somewhere before we attempt to do IO on the TCP connection.
+Appears Nginx immediately closes it having received FCGI repsonse.
 
 ** DONE Chunking with read-bytes-avail!
 CLOSED: [2019-06-21 Fri 12:13]
@@ -209,11 +251,6 @@ record and has to be communicated over TCP socket.
 
 First, is there a better than bytes-avail strategy for reading bytes from ports?
 Should we simply accumulate the entire <stdout> then deliver it?
-
-** TODO Other roles: authorizer and filter
-
-Although I admit I haven't the foggiest why or when they would ever be used. Can I
-find some examples in the wild?
 
 ** DONE Listen and receive FCGI connections
 CLOSED: [2019-06-15 Sat 17:07]
@@ -327,28 +364,16 @@ CLOSED: [2019-06-11 Tue 13:38]
 ** IDEA FCGI in Typed Racket
 CLOSED: [2019-06-11 Tue 13:38]
 
+** IDEA Visualize FCGI in a simple Racket UI
+CLOSED: [2019-06-11 Tue 13:33]
+
+** IDEA Visualize FCGI by generating PlantUML diagrams
+
 ** IDEA bitsyntax match on port
 CLOSED: [2019-06-11 Tue 13:36]
 
 ** IDEA bitsyntax match -> Racket match
 CLOSED: [2019-06-11 Tue 13:35]
-
-** TODO Measure absolute perf with apache-bench
-
-- State "TODO"       from "IDEA"       [2019-06-16 Sun 11:30]
-** IDEA Compare perf with Racket SCGI
-CLOSED: [2019-06-18 Tue 10:48]
-** IDEA Compare perf with kcgi
-CLOSED: [2019-06-11 Tue 13:34]
-
-** IDEA Visualize FCGI in a simple Racket UI
-CLOSED: [2019-06-11 Tue 13:33]
-
-** TODO Visualize FCGI by generating PlantUML diagrams
-- State "STARTED"    from "IDEA"       [2019-06-15 Sat 14:39] \\
-  Going to try and receive at least one fcgi record from the webserver.
-:LOGBOOK:
-:END:
 
 * FastCGI protocol
 
