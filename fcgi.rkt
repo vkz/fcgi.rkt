@@ -792,10 +792,31 @@
 ;;* app ---------------------------------------------------------- *;;
 
 
+(require (for-syntax syntax/parse
+                     racket/port))
+(define-syntax (emacs stx)
+  ;; TODO we could be clever here and allow #, to escape into racket to compute a
+  ;; value to be spliced in i.e. elisp embedded in Racket.
+  (syntax-parse stx
+    ((_ sexp)
+     #:with e (datum->syntax stx (with-output-to-string
+                                   (λ () (write (syntax->datum #'sexp)))))
+     #'(parameterize ((current-output-port (open-output-nowhere 'null-out))
+                      (current-error-port (open-output-nowhere 'null-err)))
+         (system* (find-executable-path "emacsclient") "-e" e)))))
+
+
 (define (app request)
+  (define uri (get request:params "REQUEST_URI"))
+  (define q (regexp-match #rx".*[?](.*)" uri))
+  (define action (if q (second q) "next"))
+  (case action
+    (("next") (emacs (with-current-buffer "presentation.org"
+                       (org-tree-slide-move-next-tree))))
+    (("prev") (emacs (with-current-buffer "presentation.org"
+                       (org-tree-slide-move-previous-tree)))))
   (display "Content-type: text/html\r\n\r\n")
-  ;; TODO HTML table with params
-  (display "<html><body>Hello world!</body></html>"))
+  (display (format "<html><body>~a</body></html>" action)))
 
 
 ;;* Main --------------------------------------------------------- *;;
