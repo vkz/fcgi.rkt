@@ -801,24 +801,25 @@
     ((_ sexp)
      #:with e (datum->syntax stx (with-output-to-string
                                    (λ () (write (syntax->datum #'sexp)))))
-     #'(parameterize ((current-output-port (open-output-nowhere 'null-out))
-                      (current-error-port (open-output-nowhere 'null-err)))
-         (system* (find-executable-path "emacsclient") "-e" e)))))
+     #'(system* (find-executable-path "emacsclient") "-e" e))))
 
 
 (define (app request)
   (define uri (get request:params "REQUEST_URI"))
   (define q (regexp-match #rx".*[?](.*)" uri))
   (define action (if q (second q) "next"))
-  (case action
-    (("next") (emacs (with-current-buffer "presentation.org"
-                       (org-tree-slide-move-next-tree))))
-    (("prev") (emacs (with-current-buffer "presentation.org"
-                       (org-tree-slide-move-previous-tree)))))
+  (define html (open-input-file "data/clicker.html" #:mode 'text))
+  (match-define (list pre post) (regexp-split #rx"--slide--" html))
+  (define prompt
+    (with-output-to-bytes
+      (thunk
+       (case action
+         (("next") (emacs (with-current-buffer "presentation.org" (ze-next-slide))))
+         (("prev") (emacs (with-current-buffer "presentation.org" (ze-prev-slide))))))))
   (display "Content-type: text/html\r\n\r\n")
-  (copy-port
-   (open-input-file "data/clicker.html" #:mode 'text)
-   (current-output-port)))
+  (display pre)
+  (display (read (open-input-bytes prompt)))
+  (display post))
 
 
 ;;* Main --------------------------------------------------------- *;;
