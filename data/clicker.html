@@ -1,0 +1,93 @@
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8">
+    <title> Clicker </title>
+    <style>
+      html,
+      body {
+          height: 100%;
+      }
+
+      .container {
+          height: 100%;
+          min-height: 100%;
+          display: flex;
+          flex-direction: row;
+      }
+
+      .container .box {
+          padding: 20px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+      }
+
+      .container .prev {
+          color: white;
+          background-color: green;
+          width: 15%;
+          font-size: 2.5rem;
+      }
+
+      .container .next {
+          flex: 1;
+          cursor: pointer;
+      }
+
+      .slide {
+          font-family: sans-serif;
+          font-size: 4rem;
+          line-height: 1.5;
+          overflow: auto;
+          white-space: pre-line;
+          display: inline-block;
+          vertical-align: top;
+          background: #f6f6f6;
+          border: 1px solid #bdbdbd;
+          border-radius: 4px;
+          padding: 1rem;
+          line-height: 1.4;
+          margin-right: 1rem;
+          margin-bottom: 1rem;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <a class="box prev timer" href="/index.rkt?prev"> prev </a>
+      <div class="box next" onclick="location.href='/index.rkt?next';">
+        <div class="slide">
+
+        --slide--
+
+        </div>
+      </div>
+    </div>
+    <script>
+      let counter = 0;
+      const timer = document.querySelector('.timer');
+
+      function displayCount() {
+          let hours = Math.floor(counter / 3600);
+          let minutes = Math.floor((counter % 3600)/60);
+          let seconds = Math.floor(counter % 60)
+
+          let displayHours = (hours < 10) ? '0' + hours : hours;
+          let displayMinutes = (minutes < 10) ? '0' + minutes : minutes;
+          let displaySeconds = (seconds < 10) ? '0' + seconds : seconds;
+
+          timer.textContent = displayHours + ':' + displayMinutes + ':' + displaySeconds;
+
+          counter++;
+      }
+
+      document.addEventListener('DOMContentLoaded', function() {
+          // TODO counter = parseServerTime(timer);
+          setInterval(displayCount, 1000);
+          displayCount();
+      }, false);
+
+    </script>
+  </body>
+</html>
