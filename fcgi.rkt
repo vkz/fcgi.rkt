@@ -816,7 +816,9 @@
     (("prev") (emacs (with-current-buffer "presentation.org"
                        (org-tree-slide-move-previous-tree)))))
   (display "Content-type: text/html\r\n\r\n")
-  (display (format "<html><body>~a</body></html>" action)))
+  (copy-port
+   (open-input-file "data/clicker.html" #:mode 'text)
+   (current-output-port)))
 
 
 ;;* Main --------------------------------------------------------- *;;
