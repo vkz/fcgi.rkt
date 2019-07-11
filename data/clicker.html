@@ -55,18 +55,23 @@
 
   <body>
     <div class="container">
-      <a class="box prev timer" href="/index.rkt?prev"> prev </a>
+      <a class="box prev timer" href="/index.rkt?prev">
+
+        --timer--
+
+      </a>
       <div class="box next" onclick="location.href='/index.rkt?next';">
         <div class="slide">
 
-        --slide--
+          --slide--
 
         </div>
       </div>
     </div>
     <script>
-      let counter = 0;
       const timer = document.querySelector('.timer');
+      let counter = timer.textContent.split(new RegExp(':')).map(t => parseInt(t));
+      counter = counter[0] * 3600 + counter[1] * 60 + counter[2];
 
       function displayCount() {
           let hours = Math.floor(counter / 3600);

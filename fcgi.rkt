@@ -809,17 +809,24 @@
   (define q (regexp-match #rx".*[?](.*)" uri))
   (define action (if q (second q) "next"))
   (define html (open-input-file "data/clicker.html" #:mode 'text))
-  (match-define (list pre post) (regexp-split #rx"--slide--" html))
+  (match-define (list pre rest) (regexp-split #rx"--timer--" html))
+  (match-define (list mid post) (regexp-split #rx"--slide--" rest))
   (define prompt
     (with-output-to-bytes
       (thunk
        (case action
          (("next") (emacs (with-current-buffer "presentation.org" (ze-next-slide))))
          (("prev") (emacs (with-current-buffer "presentation.org" (ze-prev-slide))))))))
+  (match-define (list timer slide) (read (open-input-bytes prompt)))
   (display "Content-type: text/html\r\n\r\n")
   (display pre)
-  (display (read (open-input-bytes prompt)))
+  (display (read (open-input-string timer)))
+  (display mid)
+  (display slide)
   (display post))
+
+
+#;(app {(:params {("REQUEST_URI" "/index.rkt?next")})})
 
 
 ;;* Main --------------------------------------------------------- *;;
