@@ -9,7 +9,6 @@ FCGI  -*- mode: org; fill-column: 82 -*-
 * fcgi.rkt
 
 ** TODO Add proper logging
-SCHEDULED: <2019-06-28 Fri>
 
 Log every record received.
 Log every record sent.
@@ -19,8 +18,7 @@ Log every thread started or complete.
 If we do it right and manage to get reasonable timestamps, we could then use this
 log to visualize protocol flow.
 
-** TODO test record lifecycles [0/5]
-SCHEDULED: <2019-06-28 Fri>
+** TODO Test record lifecycles [0/5]
 
 Some records are impossible to test if a webserver never bothers to send em e.g.
 <get-values> and some random unknown type (which we catch with <unknown-type>). I
@@ -54,6 +52,8 @@ that gracefully. How the hell do I force Nginx to excibit such conditions?
   [2019-06-21 Fri]
 
 guess I need to sprinkle dynamic-wind or smth - read more about such things.
+
+If nothing else I need this to ensure that we release the TCP port for reuse.
 
 *** TODO ensure we don't leak memory
 
@@ -89,14 +89,12 @@ CLOSED: [2019-06-28 Fri 19:18] SCHEDULED: <2019-06-28 Fri>
 CLOSED: [2019-06-28 Fri 19:18] SCHEDULED: <2019-06-28 Fri>
 - State "DONE"       from "TODO"       [2019-06-28 Fri 19:18]
 ** TODO <stderr>
-SCHEDULED: <2019-06-28 Fri>
 
 Somewhat fuzzy as to what this ought to actually be. Appears that it is like
 <stdout> to "respond" with some error page or something. I'd have to experiment
 and see if e.g. I send only <stderr> what the client gets.
 
 ** TODO #lang fcgi - what is fcgi app?
-SCHEDULED: <2019-06-29 Sat>
 
 - State "TODO"       from "IDEA"       [2019-06-20 Thu 12:13]
 Beginning to understand here. Our fcgi implementation should be nothing but the
@@ -215,20 +213,33 @@ find some examples in the wild?
 
 *** TODO filter role
 
-** TODO Implement parse, pack and deliver for every record
-- State "TODO"       from "STARTED"    [2019-06-21 Fri 16:18]
-:LOGBOOK:
-CLOCK: [2019-06-21 Fri 14:40]--[2019-06-21 Fri 16:17] =>  1:37
-:END:
+** TODO Test use with Nginx
 
-not required to implement the protocol, but it would make it possible to write
-standalone tests that don't require external webserver.
+tweaking whatever FCGI options it offers, e.g. is it possible to enable
+multiplexing?
+
+** TODO Test use with HTTPD
+
+** TODO Test use with Apache
+
+
+** TODO Document fcgi.rkt
+
+*** TODO README.org for fcgi.rkt
+
+*** TODO Scribble fcgi.rkt
+
+** TODO Release fcgi.rkt
+DEADLINE: <2019-09-14 Sat>
+
+don't forget to announce
 
 ** TODO Measure performance
 
-*** TODO Measure absolute perf with apache-bench
-SCHEDULED: <2019-06-28 Fri>
+*** DEFERRED Measure absolute perf with apache-bench
+CLOSED: [2019-07-14 Sun 09:27] SCHEDULED: <2019-07-09 Tue>
 
+- State "DEFERRED"   from "TODO"       [2019-07-14 Sun 09:27]
 - State "TODO"       from "IDEA"       [2019-06-16 Sun 11:30]
 
 *** IDEA Compare perf with Racket SCGI
